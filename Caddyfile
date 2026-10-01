@@ -1,0 +1,34 @@
+# Caddy config for serving the Triauth Authenticator as a static site.
+#
+# Set DOMAIN to your endpoint's hostname for automatic HTTPS (Let's Encrypt):
+#   docker run -e DOMAIN=auth.example.com -p 80:80 -p 443:443 ...
+# Leave DOMAIN unset to serve plain HTTP on :80 (e.g. behind a TLS-terminating proxy).
+
+{$DOMAIN::80} {
+	root * /srv
+	file_server
+	encode gzip zstd
+
+	header {
+		X-Frame-Options "DENY"
+		Content-Security-Policy "frame-ancestors 'none'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+        Cross-Origin-Opener-Policy "same-origin"
+        Cross-Origin-Embedder-Policy "require-corp"
+        Cross-Origin-Resource-Policy "same-origin"
+
+        Document-Policy "document-write=?0"
+
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), accelerometer=(), gyroscope=(), magnetometer=()"
+
+		# Don't advertise the server.
+		-Server
+	}
+
+	# The service worker must never be cached - updates take effect on the next navigation.
+	@sw path /sw.js
+	header @sw Cache-Control "no-cache"
+}

@@ -1,0 +1,41 @@
+/*
+ * Triauth Authenticator - Copyright (c) 2026 The Triauth Authors (https://www.triauth.org/)
+ * Licensed under the Elastic License 2.0; see LICENSE.txt for the full text.
+ * SPDX-License-Identifier: Elastic-2.0
+ */
+
+@import "tailwindcss";
+
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+
+:root {
+  --font-family: 'Chinese Quotes', 'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Helvetica, Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+
+  font-family: var(--font-family);
+  line-height: 1.5;
+  font-weight: 400;
+
+  color: #213547;
+  background-color: var(--color-gray-50);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: start;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: var(--color-gray-50);
+}
+
+#app {
+  width:100%;
+}

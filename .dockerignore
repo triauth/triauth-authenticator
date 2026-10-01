@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+node_modules
+dist
+docs
+*.log
+Dockerfile
+.dockerignore
+README.md
+SECURITY.md
+.wrangler
+.private

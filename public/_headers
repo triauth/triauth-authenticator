@@ -1,0 +1,19 @@
+# HTTP response headers for hosting providers that support `_headers` files.
+#
+# Note: the app already sets a per-page Content-Security-Policy via <meta> tags,
+# and those are deliberately different per page.
+/*
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
+  Document-Policy: document-write=?0
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), accelerometer=(), gyroscope=(), magnetometer=()
+
+# The service worker must never be cached - updates take effect on the next navigation.
+/sw.js
+  Cache-Control: no-cache

@@ -1,0 +1,104 @@
+name: release
+
+# Builds a verifiable, prebuilt static bundle and attaches it to a GitHub Release.
+# Trigger by pushing a version tag, e.g.:
+#   git tag v1.0.0-beta.1 && git push origin v1.0.0-beta.1
+#
+# The bundle ships with a SHA256SUMS file and a build-provenance attestation, so
+# self-hosters can confirm the bytes they serve were built by this workflow from
+# this source (see the "Self-hosting" section of the README).
+#
+# It also fast-forwards the `production` branch to the released commit, so deployments
+# that track `production` (e.g. Cloudflare Pages, which can follow a branch
+# but not a tag) always serve the latest release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and release (e.g. v1.0.0-beta.1)'
+        required: true
+
+permissions:
+  contents: write      # create the release, upload assets, push `production`
+  id-token: write      # mint the OIDC token used for build provenance
+  attestations: write  # record the provenance attestation
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # Don't leave the token in the checkout: the install and build steps run
+          # third-party code and have no business pushing. The last step passes the
+          # token explicitly.
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Resolve version
+        id: ver
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: Package the static bundle (reproducible tarball)
+        id: pkg
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          artifact="triauth-authenticator-${VERSION}.tar.gz"
+          # Deterministic flags so the same source produces byte-identical archives:
+          # fixed order, owner, mtime and mode (the mode would otherwise follow the umask).
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime='UTC 2020-01-01' --mode='go=rX,u+rw,a-s' \
+              -czf "$artifact" -C dist .
+          sha256sum "$artifact" | tee SHA256SUMS
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.pkg.outputs.artifact }}
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          ARTIFACT: ${{ steps.pkg.outputs.artifact }}
+        run: |
+          gh release create "$TAG" \
+            --title "v$VERSION" \
+            --generate-notes \
+            "$ARTIFACT" SHA256SUMS \
+          || gh release upload "$TAG" "$ARTIFACT" SHA256SUMS --clobber
+
+      - name: Advance the production branch to this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "HEAD:refs/heads/production" || {
+            echo "::error::Could not fast-forward 'production' to $TAG. Is this release a descendant of the current production tip?"
+            exit 1
+          }

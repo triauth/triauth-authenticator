@@ -1,0 +1,15 @@
+// Cloudflare Workers static-assets deployment: `npm run build && npx wrangler deploy`.
+// Also read by the "Deploy to Cloudflare" button and Workers Builds (build: npm run build).
+{
+  "name": "triauth-authenticator",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./dist",
+
+    // Serve /auth.html etc. verbatim.
+    "html_handling": "none",
+
+    // Unknown paths get an empty 404
+    "not_found_handling": "none"
+  }
+}

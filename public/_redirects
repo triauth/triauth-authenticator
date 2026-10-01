@@ -1,0 +1,2 @@
+# Maps "/" to index.html (200 = serve, URL unchanged)
+/ /index.html 200
