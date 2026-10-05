@@ -18,9 +18,11 @@ if (!termsAccepted) {
 </script>
 
 <template>
-  <Suspense>
-    <AuthPage/>
-  </Suspense>
+  <main class="grow">
+    <Suspense>
+      <AuthPage/>
+    </Suspense>
+  </main>
   <Footer/>
   <PassphrasePrompt/>
 </template>

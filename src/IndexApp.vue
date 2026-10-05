@@ -56,9 +56,11 @@ db.sweepExpired('tokens').catch((err) => Triauth.config.logger.error(err));
 </script>
 
 <template>
-  <Transition name="fade" mode="out-in">
-    <Component :is="currentView" v-if="currentView"/>
-  </Transition>
+  <main class="grow">
+    <Transition name="fade" mode="out-in">
+      <Component :is="currentView" v-if="currentView"/>
+    </Transition>
+  </main>
 
   <!-- Durability nudge only on the identity/home views - never over the wizard or welcome -->
   <StorageDurabilityBanner v-if="currentView === IndexPage || currentView === HomePage"/>

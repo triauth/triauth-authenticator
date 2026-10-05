@@ -19,9 +19,11 @@ if (!termsAccepted) {
 </script>
 
 <template>
-  <Suspense>
-    <SignPage/>
-  </Suspense>
+  <main class="grow">
+    <Suspense>
+      <SignPage/>
+    </Suspense>
+  </main>
   <Footer/>
   <PassphrasePrompt/>
 </template>
