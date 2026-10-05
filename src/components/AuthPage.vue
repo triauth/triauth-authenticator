@@ -29,13 +29,13 @@ const requestedExt = {};
 
 const permissionSwitchesRef = ref({});
 
-// Capabilities granted without a toggle when the site requests them (see confirm());
-// they are listed on the consent screen so the approval is informed.
-const BACKGROUND_GRANT_DESCRIPTIONS = {
+// Every token a website may request; each requested one is minted on approval (see confirm())
+const TOKEN_TYPES = ['pingToken', 'signToken', 'stampToken', 'attestToken'];
+
+// The tokens that later sign with no prompt are listed on the consent screen
+const SILENT_GRANT_DESCRIPTIONS = {
   pingToken: 'verify your session in the background while you use it',
-  signToken: 'ask you to approve and sign documents',
-  stampToken: 'prove to other websites that you are signed in',
-  attestToken: 'ask you to confirm details about yourself'
+  stampToken: 'prove to other websites that you are signed in'
 };
 
 // The private profile fields that a grant shares: the non-empty ones. The consent screen lists
@@ -45,22 +45,10 @@ const sharedPrivateProfile = () =>
 
 const privateProfileFieldsRef = computed(() => Object.keys(sharedPrivateProfile()).join(', '));
 
-// A computed array of human-readable permissions that are granted to the website, displayed as a list
-const grantsRef = computed(() => {
-  const grants = [];
-
-  if (requestedExt.privateProfile && permissionSwitchesRef.value.privateProfile) {
-    grants.push({key: 'privateProfile', text: 'read your private profile', detail: privateProfileFieldsRef.value});
-  }
-
-  for (const [k, text] of Object.entries(BACKGROUND_GRANT_DESCRIPTIONS)) {
-    if (requestedExt[k]) {
-      grants.push({key: k, text});
-    }
-  }
-
-  return grants;
-});
+// The silent grants the website requested, displayed as a list on the consent screen
+const grantsRef = computed(() =>
+  Object.entries(SILENT_GRANT_DESCRIPTIONS).filter(([k]) => requestedExt[k]).map(([key, text]) => ({key, text}))
+);
 
 const errorMessageRef = ref('');
 
@@ -111,7 +99,7 @@ async function setup() {
           permissionSwitchesRef.value[k] = Object.keys(website.permissions).includes(k) ? !!website.permissions[k] : false;
         }
 
-      } else if (['attestToken', 'pingToken', 'signToken', 'stampToken'].indexOf(k) >= 0) {
+      } else if (TOKEN_TYPES.indexOf(k) >= 0) {
         requestedExt[k] = !!v;
 
       } else if (k === 'manifest') {
@@ -206,7 +194,7 @@ async function confirm(){
       signedMetadata.ext.privateProfile = sharedPrivateProfile();
     }
 
-    for (const type of Object.keys(BACKGROUND_GRANT_DESCRIPTIONS)) {
+    for (const type of TOKEN_TYPES) {
       if (permissionSwitchesRef.value[type] || !!requestedExt[type]) {
         const value = ':' + Triauth.Helpers.randomString(24);
 
@@ -291,9 +279,7 @@ async function deny() {
       <div class="mx-7 p-2 text-left text-sm text-gray-500" v-if="grantsRef.length > 0">
         Approving will allow this website to:
         <ul class="list-disc ml-5 mt-1">
-          <li v-for="grant of grantsRef" :key="grant.key">
-            {{ grant.text }}<span v-if="grant.detail"> ({{ grant.detail }})</span>
-          </li>
+          <li v-for="grant of grantsRef" :key="grant.key">{{ grant.text }}</li>
         </ul>
       </div>
 
