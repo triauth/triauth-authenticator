@@ -285,7 +285,7 @@
           They will be visible to everyone who knows or guesses your identifier.
         </Message>
 
-        <div class="mb-2 text-center">
+        <div class="_preview mb-2 text-center">
           <Avatar :label="publicProfile.initials || null" class="mr-2" size="large" shape="circle">
             <template #icon><PersonIcon class="_person text-gray-500" aria-hidden="true"/></template>
           </Avatar>
@@ -310,7 +310,7 @@
           and you can decide on a case-by-case basis if you want to share it with them.
         </Message>
 
-        <div class="mb-2 text-center">
+        <div class="_preview mb-2 text-center">
           <Avatar :label="privateProfile.initials || null" class="mr-2" size="large" shape="circle" :title="privateProfile.initials">
             <template #icon><PersonIcon class="_person text-gray-500" aria-hidden="true"/></template>
           </Avatar>
@@ -1124,8 +1124,10 @@ const addTestIdentity = async (entry) => {
 ._ext svg { width:1rem; height:1rem; fill:currentColor; }
 
 /* On phones the text column inside the hint box is half the screen, so the box runs into the card's padding, only the
-   question and the switch (._lead) keep the info sign's gutter, and the record table stacks each label above its value */
+   question and the switch (._lead) keep the info sign's gutter, the record table stacks each label above its value, and
+   the profile steps drop the avatar preview so the fields stay in view above the keyboard */
 @media (max-width: 480px) {
+  ._preview { display:none; }
   ._dns-hint { margin-left:-1.5rem; margin-right:-1.5rem; }
   ._dns-hint > ._status { padding-left:0; }
   ._dns-hint > ._status > ._lead { padding-left:1.6em; }

@@ -155,7 +155,7 @@ function websiteIconSrc(website) {
 
       <div v-if="greetedIdRef === identityRef.id && websitesRef.length === 0" class="pt-20 text-center">
         <h2 class="text-2xl font-bold ta-rise" style="--d:.15s" @animationend="burst">You're all set!</h2>
-        <p class="pt-3 ta-rise" style="--d:.3s">{{ identityRef.whoisResponse ? 'You can now sign in to websites with this device.' : 'Once your DNS records are visible, you can sign in to websites with this device.' }}</p>
+        <p class="pt-3 px-3 ta-rise" style="--d:.3s">{{ identityRef.whoisResponse ? 'You can now sign in to websites with this device.' : 'Once your DNS records are visible, you can sign in to websites with this device.' }}</p>
         <p class="text-sm pt-5 ta-rise" style="--d:.45s">Websites you sign in to will show up here.</p>
       </div>
 
