@@ -253,8 +253,8 @@
             </div>
             <div class="ml-4 grow">
               {{signer.t.title}}
-              <div class="mt-3">
-                <Tag v-if="signer.factor" severity="secondary" class="mr-2">Something you {{ signer.factor }}</Tag>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <Tag v-if="signer.factor" severity="secondary">Something you {{ signer.factor }}</Tag>
                 <Tag severity="secondary" v-if="signer == signers[0]">Default</Tag>
               </div>
             </div>
@@ -285,10 +285,10 @@
           <div class="m-4 mt-2 mb-0 mr-6">{{publicProfile.name || '&nbsp;'}}</div>
         </div>
 
-        <InputText v-model="publicProfile.initials" placeholder="Your initials" maxlength="2" @keydown.enter.prevent="submitField" :autofocus="!publicProfile.initials"/>
+        <InputText v-model="publicProfile.initials" placeholder="Your initials" maxlength="2" @keydown.enter.prevent="submitField"/>
         <InputText v-model="publicProfile.name" placeholder="Your name or nickname" maxlength="25" @keydown.enter.prevent="submitField"/>
 
-        <Button @click="next" :disabled="!!publicProfileError" class="mt-10" :autofocus="!!publicProfile.initials">{{ (publicProfile.initials || publicProfile.name) ? 'Next' : 'Skip' }}</Button>
+        <Button @click="next" :disabled="!!publicProfileError" class="mt-10" autofocus>{{ (publicProfile.initials || publicProfile.name) ? 'Next' : 'Skip' }}</Button>
         <Button @click="prev" variant="text" size="small">&laquo; go back</Button>
       </div>
     </div>
@@ -309,11 +309,11 @@
           <div class="m-4 mt-0 mr-6 text-sm text-gray-500">{{privateProfile.email || '&nbsp;'}}</div>
         </div>
 
-        <InputText v-model="privateProfile.initials" :invalid="privateProfileErrors.initials" placeholder="Your initials" maxlength="2" @keydown.enter.prevent="submitField" :autofocus="!privateProfile.initials"/>
+        <InputText v-model="privateProfile.initials" :invalid="privateProfileErrors.initials" placeholder="Your initials" maxlength="2" @keydown.enter.prevent="submitField"/>
         <InputText v-model="privateProfile.name" :invalid="privateProfileErrors.name" placeholder="Name" maxlength="100" @keydown.enter.prevent="submitField"/>
         <InputText v-model="privateProfile.email" :invalid="privateProfileErrors.email" placeholder="Email address" maxlength="100" @keydown.enter.prevent="submitField"/>
 
-        <Button @click="next" :disabled="privateProfileErrors.any" class="mt-10" :autofocus="!!privateProfile.initials">{{ (privateProfile.initials || privateProfile.name || privateProfile.email) ? 'Next' : 'Skip' }}</Button>
+        <Button @click="next" :disabled="privateProfileErrors.any" class="mt-10" autofocus>{{ (privateProfile.initials || privateProfile.name || privateProfile.email) ? 'Next' : 'Skip' }}</Button>
         <Button @click="prev" variant="text" size="small">&laquo; go back</Button>
       </div>
     </div>
