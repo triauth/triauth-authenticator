@@ -60,6 +60,9 @@
                       The <strong>{{ identifierDomain }}</strong> domain has a broken triauth record.
                       Replace it with the single TXT record below:
                     </p>
+                    <p class="mt-3" v-else-if="dnsHost?.name">
+                      Sign in to <a :href="dnsHost.url" target="_blank" rel="noopener noreferrer" class="underline">{{ dnsHost.name }}</a>, which hosts the DNS records of <strong>{{ identifierDomain }}</strong>, and add the TXT record below:
+                    </p>
                     <p class="mt-3" v-else>
                       Sign in to the DNS panel of <strong>{{ identifierDomain }}</strong> and add the TXT record below to its DNS settings:
                     </p>
@@ -70,7 +73,14 @@
                       <tbody>
                       <tr>
                         <th scope="row">Host / Name</th>
-                        <td><code class="_sel" :title="copyTitle" @click="selectFragment">{{ identifierDomain }}</code><br/>In this field, most panels also take <code class="_sel" :title="copyTitle" @click="selectFragment">@</code> or an empty field for the domain itself.</td>
+                        <td>
+                          <template v-if="!dnsHost?.name && hostField === identifierDomain">In this field, most panels take <code class="_sel" :title="copyTitle" @click="selectFragment">@</code> or an empty field for the domain itself. A few take the full name <code class="_sel" :title="copyTitle" @click="selectFragment">{{ identifierDomain }}</code>.</template>
+                          <template v-else-if="hostField === ''">Leave this field empty</template>
+                          <template v-else>
+                            <code class="_sel" :title="copyTitle" @click="selectFragment">{{ hostField }}</code>
+                            <template v-if="!dnsHost?.name"><br/>A few panels take the full name <code class="_sel" :title="copyTitle" @click="selectFragment">{{ identifierDomain }}</code> instead.</template>
+                          </template>
+                        </td>
                       </tr>
                       <tr>
                         <th scope="row">Record Type</th>
@@ -313,9 +323,16 @@
         <h2 class="text-xl font-bold text-left mb-10">Almost there</h2>
 
         <p class="text-left leading-relaxed wrap-anywhere">
-          Please sign in to the administration panel of
-          <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.parent}}</span></strong>
-          domain
+          <template v-if="dnsHost?.name">
+            Please sign in to <a :href="dnsHost.url" target="_blank" rel="noopener noreferrer" class="underline">{{ dnsHost.name }}</a>, which hosts the
+            <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{ dnsHost.zone }}</span></strong>
+            domain,
+          </template>
+          <template v-else>
+            Please sign in to the administration panel of
+            <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.parent}}</span></strong>
+            domain
+          </template>
           <span v-for="[k, lines] of Object.entries(dnsRecords())" :key="k">
             <span v-if="lines.length">
               <span v-if="k === 'toRemove'"><br/><br/>remove the following existing DNS TXT record(s) for the <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.prefix}}</span><wbr/><span style="opacity:0.7;">{{identityDomainParts.suffix}}</span></strong> subdomain:</span>
@@ -323,6 +340,7 @@
               <pre class="_code text-left"><span v-for="(rec, i) of lines" :key="i" style="display:block;"><span style="opacity:0.5;"><span class="_sel" :title="copyTitle" @click="selectFragment">{{ identityDomainParts.prefix }}</span>{{ identityDomainParts.suffix }} TXT </span>"<span class="_sel" :title="copyTitle" @click="selectFragment">{{ rec }}</span>"</span></pre>
               <span v-if="k === 'toAdd' && identityWhois?.identityDomain" class="block text-right -mt-6">
                 <span class="text-sm text-gray-500 mr-3" aria-live="polite" v-if="copied">✓ Copied to clipboard</span>
+                <span class="text-sm text-gray-500 mr-3" v-if="dnsHost?.zoneImport">{{ dnsHost.name }} can import a zone file:</span>
                 <Button @click="exportZoneFile" variant="text" size="small">Export to Zone File</Button>
               </span>
             </span>
@@ -471,6 +489,7 @@ const triauthConfig = {resolver: new Triauth.Resolvers.Cloudflare({
 const identifier = ref('');
 const identifierError = ref(null);
 const whoisResponse = ref(null);
+const dnsHost = ref(null);   // the zone holding the domain, with {name, url, zoneImport, apex} of its DNS host when recognised
 const isPrivate = computed(() => whoisResponse.value?.authenticationEndpoint?.options?.mode === 'private');
 const recheck = ref(null);   // "Check again": null | 'pending' | 'unchanged'
 
@@ -481,6 +500,14 @@ const canRecheck = computed(() => !identifierError.value && !!whoisResponse.valu
 // this authenticator — used to show the DNS setup hint when a domain isn't configured for triauth.
 const identifierDomain = computed(() => identifier.value.split('@')[1] || '');
 const endpointHost = window.location.hostname;
+
+// What goes in the panel's Host / Name field: for the zone itself a recognised panel's own convention ('@' or an empty
+// field), else the full name, which the row turns into a note; below the zone the labels above it, which every panel takes
+const hostField = computed(() => {
+  const domain = identifierDomain.value, zone = dnsHost.value?.zone;
+  if (domain === zone) return dnsHost.value.name ? dnsHost.value.apex : domain;
+  return zone && domain.endsWith('.' + zone) ? domain.slice(0, -zone.length - 1) : domain;
+});
 
 // "Somebody else manages this domain?": a message to forward, with the usual addresses as recipients
 const manages = ref(null);   // 'me' | 'other', kept while the step is open
@@ -509,6 +536,7 @@ const validateIdentifier = async () => {
 
   // Every edit invalidates the previous lookup. An emptied field shows the intro again.
   whoisResponse.value = null;
+  dnsHost.value = null;
   recheck.value = null;
   if (identifier.value === '') {
     identifierError.value = null;
@@ -558,6 +586,36 @@ const isRegistrable = (domain) => {
   return !parent.includes('.') || SECOND_LEVEL_SUFFIXES.includes(parent);
 };
 
+// Known DNS hosts, told apart by the primary nameserver of a zone
+const DNS_HOSTS = [
+  {name: 'Cloudflare',      match: /\.ns\.cloudflare\.com$/,              url: (zone) => `https://dash.cloudflare.com/?to=/:account/${zone}/dns/records`, zoneImport: true},
+  {name: 'GoDaddy',         match: /\.domaincontrol\.com$/,               url: (zone) => `https://dcc.godaddy.com/control/dnsmanagement?domainName=${zone}`, zoneImport: true},
+  {name: 'Namecheap',       match: /\.registrar-servers\.com$/,           url: (zone) => `https://ap.www.namecheap.com/Domains/DomainControlPanel/${zone}/advanceddns`},
+  {name: 'Porkbun',         match: /\.ns\.porkbun\.com$/,                 url: () => 'https://porkbun.com/account/domainsSpeedy', apex: ''},
+  {name: 'IONOS',           match: /\.ui-dns\.(com|de|org|biz)$/,         url: () => 'https://my.ionos.com/domains'},
+  {name: 'OVHcloud',        match: /\.(ovh\.net|anycast\.me)$/,           url: (zone) => `https://www.ovh.com/manager/#/web/domain/${zone}/zone`, zoneImport: true, apex: ''},
+  {name: 'Amazon Route 53', match: /\.awsdns-\d+\.(com|net|org|co\.uk)$/, url: () => 'https://console.aws.amazon.com/route53/v2/hostedzones', zoneImport: true, apex: ''},
+  {name: 'Squarespace',     match: /\.squarespacedns\.com$/,              url: () => 'https://account.squarespace.com/domains'},
+  {name: 'DigitalOcean',    match: /^ns[1-3]\.digitalocean\.com$/,        url: (zone) => `https://cloud.digitalocean.com/networking/domains/${zone}`},
+  {name: 'Hetzner',         match: /\.ns\.hetzner\.(com|de)$/,            url: () => 'https://dns.hetzner.com/', zoneImport: true},
+  {name: 'Hostinger',       match: /\.dns-parking\.com$/,                 url: () => 'https://hpanel.hostinger.com/domains', zoneImport: true},
+];
+
+// The zone holding the domain, with {name, url, zoneImport, apex} of its DNS host when recognised; null without an SOA.
+const findDnsHost = async (domain) => {
+  let answer = null;
+  await triauthConfig.resolver.resolve(domain, 'SOA', {
+    fetch: (url, init) => fetch(url, init).then((response) => { answer = response.clone().json().catch(() => null); return response; })
+  }).catch(() => {});
+  const dns = await answer;
+
+  const soa = [...(dns?.Answer || []), ...(dns?.Authority || [])].find((r) => r.type === 6);
+  if (!soa) return null;
+  const [zone, primary] = [soa.name, soa.data.split(' ')[0]].map((n) => n.toLowerCase().replace(/\.$/, ''));
+  const host = DNS_HOSTS.find((h) => h.match.test(primary));
+  return host ? {zone, name: host.name, url: host.url(zone), zoneImport: !!host.zoneImport, apex: host.apex ?? '@'} : {zone};
+};
+
 // Looks the identifier's domain up and flags originMismatch, modeMismatch, nxdomain, and brokenRecord responses
 const lookupIdentifier = async () => {
   const currentIdentifier = identifier.value;
@@ -574,6 +632,10 @@ const lookupIdentifier = async () => {
 
   if (currentIdentifier !== identifier.value) return;
   whoisResponse.value = response;
+
+  // The domain exists: find who serves its zone, for the links to its DNS settings. Not awaited, so the status line
+  // does not wait on it; the link appears when the answer lands
+  if (!response.error && !response.nxdomain) findDnsHost(currentIdentifier.split('@')[1]).then((host) => { if (currentIdentifier === identifier.value) dnsHost.value = host; });
 };
 
 const whoisIdentifier = useDebounceFn(async () => {
