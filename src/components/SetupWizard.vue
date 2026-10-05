@@ -327,32 +327,72 @@
 
     <div v-if="step === 'dns'">
       <div class="flex flex-col gap-3">
-        <h2 class="text-xl font-bold text-left mb-10">Almost there</h2>
+        <h2 class="text-xl font-bold text-left">Almost there</h2>
+        <Message size="small" severity="secondary" variant="simple" class="text-left mb-5">
+          One last step: this device has to be listed in the DNS of <strong>{{ identityDomainParts.parent }}</strong>. Then you can sign in to websites as <strong>{{ identifier }}</strong>.
+        </Message>
 
-        <p class="text-left leading-relaxed wrap-anywhere">
-          <template v-if="dnsHost?.name">
-            Please sign in to <a :href="dnsHost.url" target="_blank" rel="noopener noreferrer" class="underline">{{ dnsHost.name }}</a>, which hosts the
-            <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{ dnsHost.zone }}</span></strong>
-            domain,
-          </template>
-          <template v-else>
-            Please sign in to the administration panel of
-            <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.parent}}</span></strong>
-            domain
-          </template>
-          <span v-for="[k, lines] of Object.entries(dnsRecords())" :key="k">
-            <span v-if="lines.length">
-              <span v-if="k === 'toRemove'"><br/><br/>remove the following existing DNS TXT record(s) for the <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.prefix}}</span><wbr/><span style="opacity:0.7;">{{identityDomainParts.suffix}}</span></strong> subdomain:</span>
-              <span v-if="k === 'toAdd'">and add the following DNS TXT record(s) for the <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.prefix}}</span><wbr/><span style="opacity:0.7;">{{identityDomainParts.suffix}}</span></strong> subdomain:</span>
-              <pre class="_code text-left"><span v-for="(rec, i) of lines" :key="i" style="display:block;"><span style="opacity:0.5;"><span class="_sel" :title="copyTitle" @click="selectFragment">{{ identityDomainParts.prefix }}</span>{{ identityDomainParts.suffix }} TXT </span>"<span class="_sel" :title="copyTitle" @click="selectFragment">{{ rec }}</span>"</span></pre>
-              <span v-if="k === 'toAdd' && identityWhois?.identityDomain" class="block text-right -mt-6">
-                <span class="text-sm text-gray-500 mr-3" aria-live="polite" v-if="copied">✓ Copied to clipboard</span>
-                <span class="text-sm text-gray-500 mr-3" v-if="dnsHost?.zoneImport">{{ dnsHost.name }} can import a zone file:</span>
-                <Button @click="exportZoneFile" variant="text" size="small">Export to Zone File</Button>
-              </span>
-            </span>
-          </span>
-        </p>
+        <div class="_dns-hint p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed text-left" v-if="identityWhois?.identityDomain">
+          <div class="_status">
+            <InfoIcon class="_info" aria-hidden="true"/>
+            Who manages the DNS records of <strong>{{ identityDomainParts.parent }}</strong>?
+            <div class="mt-2"><SelectButton v-model="manages" :options="managesOptions" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" aria-label="Who manages the DNS records"/></div>
+
+            <!-- The identifier step's answer carries over; when that step never had to ask, the records wait for one -->
+            <template v-if="manages === 'other'">
+              <p class="mt-3">Download the zone file and forward it securely to the administrator of <strong>{{ identityDomainParts.parent }}</strong> or your IT team. The file tells them what to add.</p>
+              <p class="mt-3"><Button @click="exportZoneFile">Download zone file</Button></p>
+              <p class="mt-3">You can finish the setup now. This device keeps its keys, and signing in works as soon as the administrator has made the changes.</p>
+            </template>
+            <template v-else-if="manages">
+            <p class="mt-3 wrap-anywhere">
+              <template v-if="dnsHost?.name">Sign in to <a :href="dnsHost.url" target="_blank" rel="noopener noreferrer" class="underline">{{ dnsHost.name }}</a>, which hosts the <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{ dnsHost.zone }}</span></strong> domain, and</template>
+              <template v-else>Sign in to the DNS panel of <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{ identityDomainParts.parent }}</span></strong> and</template>
+              <template v-if="dnsEntries.toRemove.length">
+                remove {{ these(dnsEntries.toRemove, 'existing TXT record') }} for the <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.prefix}}</span><wbr/><span style="opacity:0.7;">{{identityDomainParts.suffix}}</span></strong> subdomain:
+                <pre class="_code _code-compact text-left"><span v-for="(rec, i) of dnsEntries.toRemove" :key="i" style="display:block;"><span style="opacity:0.5;"><span class="_sel" :title="copyTitle" @click="selectFragment">{{ identityDomainParts.prefix }}</span>{{ identityDomainParts.suffix }} TXT </span>"<span class="_sel" :title="copyTitle" @click="selectFragment">{{ rec }}</span>"</span></pre>
+                and
+              </template>
+              add {{ these(dnsEntries.toAdd, 'TXT record') }} for the <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.prefix}}</span><wbr/><span style="opacity:0.7;">{{identityDomainParts.suffix}}</span></strong> subdomain<template v-if="dnsHost?.zoneImport">. The easiest way is to import a zone file:</template><template v-else>:</template>
+            </p>
+            <template v-if="dnsHost?.zoneImport">
+              <p class="mt-3"><Button @click="exportZoneFile">Download zone file</Button></p>
+              <p class="mt-3">Or add {{ dnsEntries.toAdd.length === 1 ? 'it' : 'them' }} by hand:</p>
+            </template>
+            <pre class="_code _code-compact text-left"><span v-for="(rec, i) of dnsEntries.toAdd" :key="i" style="display:block;"><span style="opacity:0.5;"><span class="_sel" :title="copyTitle" @click="selectFragment">{{ identityDomainParts.prefix }}</span>{{ identityDomainParts.suffix }} TXT </span>"<span class="_sel" :title="copyTitle" @click="selectFragment">{{ rec }}</span>"</span></pre>
+
+            <table class="_record" aria-label="DNS TXT records to add">
+              <tbody>
+              <tr>
+                <th scope="row">Host / Name</th>
+                <td>
+                  <code class="_sel" :title="copyTitle" @click="selectFragment">{{ identityDomainParts.prefix }}</code>
+                  <template v-if="!dnsHost?.name"><br/>A few panels take the full name <code class="_sel" :title="copyTitle" @click="selectFragment">{{ identityWhois.identityDomain }}</code> instead.</template>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Record Type</th>
+                <td><code>TXT</code></td>
+              </tr>
+              <tr>
+                <th scope="row">Value / Content</th>
+                <td>
+                  <template v-if="dnsEntries.toAdd.length > 1">Add a separate record for each of these {{ dnsEntries.toAdd.length }} values:</template>
+                  <div v-for="(rec, i) of dnsEntries.toAdd" :key="i" :class="{'mt-1': i > 0 || dnsEntries.toAdd.length > 1}"><code class="_sel" :title="copyTitle" @click="selectFragment">{{ rec }}</code></div>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">TTL</th>
+                <td>Leave the default value</td>
+              </tr>
+              </tbody>
+            </table>
+
+            <p class="mt-3" v-if="!dnsHost?.zoneImport"><Button size="small" variant="outlined" @click="exportZoneFile">Download zone file</Button></p>
+            <p class="mt-3">Stuck? The <a href="https://www.triauth.org/identity/get-started#step-5-publish-your-records" target="_blank" rel="noopener noreferrer" class="underline">getting started guide</a> walks you through this step.</p>
+            </template>
+          </div>
+        </div>
 
         <Message size="small" severity="secondary" variant="simple" class="text-left" v-if="isPrivate">
           <div class="_status"><InfoIcon class="_info" aria-hidden="true"/>The subdomain name is derived from your identifier and your lookup code.</div>
@@ -370,13 +410,18 @@
         <Message size="small" severity="error" variant="simple" class="text-left" v-if="setupErrorRef"><div class="_status"><span>✕</span>{{ setupErrorRef }}</div></Message>
 
 
-        <Button disabled class="mt-10" v-if="dnsRecordsVerified === null">Verifying, please wait...</Button>
-        <Button @click="verifyDnsRecords" class="mt-10" v-else-if="!dnsRecordsVerified" autofocus>Verify now</Button>
-        <Button @click="finishSetup" class="mt-10" v-else>Finish setup</Button>
+        <!-- No way forward until the question above is answered -->
+        <template v-if="manages">
+          <Button disabled class="mt-10" v-if="dnsRecordsVerified === null">Verifying, please wait...</Button>
+          <Button @click="verifyDnsRecords" class="mt-10" v-else-if="!dnsRecordsVerified && manages !== 'other'" autofocus>Verify now</Button>
+          <Button @click="finishSetup" class="mt-10" v-else autofocus>Finish setup</Button>
 
-        <Button @click="finishSetup" variant="text" size="small">skip verification</Button>
-        <Button @click="prev" variant="text" size="small">&laquo; go back</Button>
+          <Button @click="verifyDnsRecords" variant="text" size="small" v-if="unverified && manages === 'other'">Verify now</Button>
+          <Button @click="finishSetup" variant="text" size="small" v-else-if="unverified">Finish without verifying</Button>
+        </template>
+        <Button @click="prev" variant="text" size="small" :class="{'mt-10': !manages}">&laquo; go back</Button>
       </div>
+
     </div>
 
 
@@ -800,14 +845,15 @@ watch(privateProfile, () => {
 ////////////
 // Step - DNS setup
 
-// identityDomain is '<label>._at.<parent-domain>'. Deriving the parent by counting
-// labels breaks on multi-label registrable domains (e.g. example.co.uk), so split on
-// the protocol's fixed '._at.' separator instead.
+// identityDomain is '<label>._at.<parent-domain>'. The prefix is what goes in a panel's Host / Name field: the labels
+// above the zone once it is known, else those above the protocol's fixed '._at.' separator (counting labels would
+// break on multi-label registrable domains such as example.co.uk)
 const identityDomainParts = computed(() => {
-  const domain = identityWhois.value?.identityDomain || '';
+  const domain = identityWhois.value?.identityDomain || '', zone = dnsHost.value?.zone;
   const at = domain.indexOf('._at.');
-  if (at === -1) return {prefix: domain, parent: domain, suffix: ''};
-  return {prefix: domain.slice(0, at + 4), parent: domain.slice(at + 5), suffix: domain.slice(at + 4)};
+  const cut = zone && domain.endsWith('.' + zone) ? domain.length - zone.length - 1 : (at === -1 ? -1 : at + 4);
+  if (cut === -1) return {prefix: domain, parent: domain, suffix: ''};
+  return {prefix: domain.slice(0, cut), parent: domain.slice(cut + 1), suffix: domain.slice(cut)};
 });
 
 // Clicking a fragment selects it whole and copies it, so it can go straight into a DNS panel.
@@ -865,6 +911,11 @@ const dnsRecords = function(){
   return entries;
 }
 
+// The records this step publishes, for the template, and "this TXT record" or "these 3 TXT records" for its sentences
+const dnsEntries = computed(dnsRecords);
+const these = (list, noun) => list.length === 1 ? `this ${noun}` : `these ${list.length} ${noun}s`;
+
+
 // Support for "export to txt file" with the records as a BIND zone file (RFC 1035).
 const ZONE_FILE_TTL = 15 * 60;
 
@@ -889,6 +940,8 @@ const zoneFile = () => {
     `; This is a DNS zone file in a BIND compatible format containing`,
     `; triauth records for ${identityWhois.value.identifier}${lookupCodeInfo}`,
     `; Import this file in your DNS provider's control panel, or add the records by hand.`,
+    `; Each line below is one TXT record: the full name, a TTL in seconds, IN TXT, and the value in quotes.`,
+    `; To add one by hand: name ${identityDomainParts.value.prefix} (some panels take the full name), type TXT, and the value without the quotes.`,
   ];
 
   // A zone file cannot express a deletion
@@ -921,6 +974,7 @@ const exportZoneFile = () => {
 
 const dnsRecordsVerified = ref(undefined);
 const verifiedWhoisResponse = ref(null);
+const unverified = computed(() => dnsRecordsVerified.value !== null && !dnsRecordsVerified.value);   // and not verifying either
 
 // Whatever changes what this step publishes invalidates an earlier verification
 watch([identifier, lookupCode], () => {
