@@ -353,7 +353,7 @@
 
         <Message size="small" :severity="!dnsRecordsVerified ? 'error' : 'secondary'" variant="simple" class="text-left" v-if="dnsRecordsVerified !== undefined && dnsRecordsVerified !== null">
           <div class="_status" v-if="!dnsRecordsVerified">
-            <span>✕</span>TXT records are not visible yet, propagation may take several minutes
+            <span>✕</span>TXT records are not visible yet. DNS changes can take a few minutes to show up. If it has been a while, see the <a href="https://www.triauth.org/identity/troubleshooting#txt-records-are-not-visible-yet" target="_blank" rel="noopener noreferrer" class="underline">troubleshooting guide</a>.
           </div>
           <div class="_status" v-else>
             <span>✓</span>All looks good
@@ -924,29 +924,26 @@ watch([identifier, lookupCode], () => {
   verifiedWhoisResponse.value = null;
 });
 
+// Whether a whois answer lists this device with exactly the keys about to be published
+const listsThisDevice = (whois) => (whois?.devices || []).some((dev) =>
+  dev.deviceName === deviceName.value && dev.keys.length === signers.value.length &&
+  signers.value.every((signer, i) =>
+    signer.publishableKey === dev.keys[i].value &&
+    Object.entries(signer.publishableKeyOptions()).every(([k, v]) => dev.keys[i].options?.[k] === v)
+  )
+);
+
+// Google's resolver, for a second look at verification: the identifier step asked Cloudflare's resolver about the
+// identity name before the records existed, and that empty answer stays cached there for the zone's negative TTL
+const secondOpinionConfig = {resolver: new Triauth.Resolvers.Google()};
+
 const verifyDnsRecords = async () => {
   dnsRecordsVerified.value = null;
 
-  const currentWhoisResponse = await Triauth.whois(whoisOptions(), triauthConfig);
+  let currentWhoisResponse = await Triauth.whois(whoisOptions(), triauthConfig);
+  if (!listsThisDevice(currentWhoisResponse)) currentWhoisResponse = await Triauth.whois(whoisOptions(), secondOpinionConfig);
 
-  let verified = false;
-  if (currentWhoisResponse?.status > 0) {
-    for (const dev of currentWhoisResponse.devices) {
-      if (dev.deviceName !== deviceName.value || dev.keys.length !== signers.value.length) {
-        continue;
-      }
-
-      const allKeysMatch = signers.value.every((signer, i) =>
-        signer.publishableKey === dev.keys[i].value &&
-        Object.entries(signer.publishableKeyOptions()).every(([k, v]) => dev.keys[i].options?.[k] === v)
-      );
-
-      if (allKeysMatch) {
-        verified = true;
-        break;
-      }
-    }
-  }
+  const verified = listsThisDevice(currentWhoisResponse);
   dnsRecordsVerified.value = verified;
   verifiedWhoisResponse.value = verified ? currentWhoisResponse : null;
 
