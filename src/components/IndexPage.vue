@@ -56,7 +56,7 @@ db.list('identities').then((ids) => {
 </script>
 
 <template>
-  <div class="m-auto rounded-lg border border-gray-200 bg-white text-left shadow-md min-w-[320px] w-max max-w-[640px]" style="margin-top:10vh;">
+  <div class="my-[10vw] md:my-[10vh] m-auto rounded-lg border border-gray-200 bg-white text-left shadow-md min-w-[320px] w-max max-w-[640px]">
     <div class="p-5 pl-5 pr-5 bg-blue-600 text-white font-bold rounded-tl-lg rounded-tr-lg flex flex-row justify-between select-none">
       <div class="size-5 text-l text-center"><strong>⠕</strong></div>
       <div class="flex-2 pr-5 pl-5">triauth</div>
