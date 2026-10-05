@@ -52,8 +52,10 @@
               <div class="_dns-hint mt-3 p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed">
                 <div class="_status">
                   <InfoIcon class="_info" aria-hidden="true"/>
-                  Who manages the <strong>{{ identifierDomain }}</strong> domain?
-                  <div class="mt-2"><SelectButton v-model="manages" :options="managesOptions" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" aria-label="Who manages the domain"/></div>
+                  <div class="_lead">
+                    Who manages the <strong>{{ identifierDomain }}</strong> domain?
+                    <div class="mt-2"><SelectButton v-model="manages" :options="managesOptions" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" aria-label="Who manages the domain"/></div>
+                  </div>
 
                   <template v-if="manages === 'me'">
                     <p class="mt-3" v-if="whoisResponse.brokenRecord">
@@ -335,8 +337,10 @@
         <div class="_dns-hint p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed text-left" v-if="identityWhois?.identityDomain">
           <div class="_status">
             <InfoIcon class="_info" aria-hidden="true"/>
-            Who manages the DNS records of <strong>{{ identityDomainParts.parent }}</strong>?
-            <div class="mt-2"><SelectButton v-model="manages" :options="managesOptions" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" aria-label="Who manages the DNS records"/></div>
+            <div class="_lead">
+              Who manages the DNS records of <strong>{{ identityDomainParts.parent }}</strong>?
+              <div class="mt-2"><SelectButton v-model="manages" :options="managesOptions" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" aria-label="Who manages the DNS records"/></div>
+            </div>
 
             <!-- The identifier step's answer carries over; when that step never had to ask, the records wait for one -->
             <template v-if="manages === 'other'">
@@ -1119,8 +1123,16 @@ const addTestIdentity = async (entry) => {
 /* A button that leaves the app: the "open in new" icon follows the label, in the button's own colour */
 ._ext svg { width:1rem; height:1rem; fill:currentColor; }
 
-/* On narrow screens the labels wrap, so the values keep enough room to stay on one line */
-@media (max-width: 480px) { ._record th { white-space:normal; } }
+/* On phones the text column inside the hint box is half the screen, so the box runs into the card's padding, only the
+   question and the switch (._lead) keep the info sign's gutter, and the record table stacks each label above its value */
+@media (max-width: 480px) {
+  ._dns-hint { margin-left:-1.5rem; margin-right:-1.5rem; }
+  ._dns-hint > ._status { padding-left:0; }
+  ._dns-hint > ._status > ._lead { padding-left:1.6em; }
+  ._record, ._record tbody, ._record tr, ._record th, ._record td { display:block; width:auto; }
+  ._record th { padding:0.5rem 0 0.125rem; white-space:normal; }
+  ._record td { padding:0 0 0.25rem; }
+}
 
 /* Code and prose fragments that a click selects whole, for pasting into a DNS panel */
 ._sel { cursor:copy; border-radius:0.15rem; }

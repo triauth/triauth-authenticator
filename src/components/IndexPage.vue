@@ -46,6 +46,8 @@ const redirectToHomeScreen = (identity) => {
   window.location = '#' + identity.identifier;
 }
 
+const authenticatorHost = window.location.hostname;
+
 // Redirect to setup if no identites found
 db.list('identities').then((ids) => {
   if(Object.keys(ids).length <= 0){
@@ -59,7 +61,7 @@ db.list('identities').then((ids) => {
   <div class="my-[10vw] md:my-[10vh] m-auto rounded-lg border border-gray-200 bg-white text-left shadow-md min-w-[320px] w-max max-w-[640px]">
     <div class="p-5 pl-5 pr-5 bg-blue-600 text-white font-bold rounded-tl-lg rounded-tr-lg flex flex-row justify-between select-none">
       <div class="size-5 text-l text-center"><strong>⠕</strong></div>
-      <div class="flex-2 pr-5 pl-5">triauth</div>
+      <div class="flex-2 pr-5 pl-5 truncate">{{ authenticatorHost }}</div>
       <div class="size-5 text-center"><a href="#setup" class="text-white hover:bg-blue-500 inline-block rounded-xl p-1 -m-1"><AddIcon/></a></div>
     </div>
 

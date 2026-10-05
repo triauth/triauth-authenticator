@@ -1,7 +1,7 @@
 {
   "id": "/",
   "name": "triauth authenticator",
-  "short_name": "triauth authenticator",
+  "short_name": "triauth",
   "description": "Sign in to websites with just a click, no passwords. Your keys stay on your device.",
   "start_url": "/index.html",
   "scope": "/index.html",
