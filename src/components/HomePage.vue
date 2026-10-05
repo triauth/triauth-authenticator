@@ -15,6 +15,7 @@ import MoreVertIcon from '../../vendor/material-icons/MoreVert.vue';
 import { db } from '../db/db.js'
 import { Helpers } from '../lib/helpers.js'
 import { confetti } from '../lib/confetti.js'
+import { isAndroid, isStandalone } from '../lib/pwa.js'
 
 const identifierRef = ref(null);
 const identityRef = ref(null);
@@ -54,6 +55,13 @@ const websitesRef = computed(() => Object.values(websites));
 
 const openWebsite = (website) => {
   const url = website.manifest?.startUrl || website.baseUrl;
+
+  // When in Android PWA, use intent URLs to launch a proper web browser
+  if (isAndroid() && isStandalone()) {
+    const u = new URL(url);
+    window.location.href = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.slice(0, -1)};action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(url)};end`;
+    return;
+  }
 
   const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
   if (newWindow) { newWindow.opener = null; } // just to stay extra-safe

@@ -77,6 +77,8 @@ export const isSafari = () =>
 
 export const isFirefox = () => /Firefox\//.test(navigator.userAgent);
 
+export const isAndroid = () => /Android/.test(navigator.userAgent);
+
 ////
 // Persistent storage
 // null = unknown or unsupported; true/false = the persisted() verdict.

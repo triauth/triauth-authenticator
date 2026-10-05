@@ -5,11 +5,11 @@
 -->
 
 <script setup>
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import {
   persistedRef, installAvailableRef, bannerDismissedRef,
   promptInstall, dismissBanner, clearBannerDismissal, refreshPersisted,
-  isStandalone, isIos, isSafari
+  isStandalone, isIos, isSafari, isAndroid
 } from '../lib/pwa.js';
 
 import CloseIcon from '../../vendor/material-icons/Close.vue';
@@ -17,6 +17,12 @@ import CloseIcon from '../../vendor/material-icons/Close.vue';
 // WebKit browsers require regular interaction even when persist() reports success.
 // Standalone WebKit apps are exempt from that inactivity rule, but on iOS their storage is isolated.
 const activityRequired = (isIos() || isSafari()) && !isStandalone();
+
+// On Android we show the install prompt
+const android = isAndroid();
+
+// The prompt was accepted: the grant trails the install by a few seconds, during which the card keeps its install line.
+const installAccepted = ref(false);
 
 const atRiskRef = computed(() => activityRequired || persistedRef.value === false);
 
@@ -29,7 +35,7 @@ const indicatorRef = computed(() => atRiskRef.value && bannerDismissedRef.value)
 const title = 'Stay ready to sign in';
 
 async function install() {
-  await promptInstall();
+  installAccepted.value = await promptInstall();
   await refreshPersisted();
 }
 </script>
@@ -47,7 +53,12 @@ async function install() {
           <div class="text-sm text-gray-600 leading-relaxed">
             <template v-if="activityRequired">
               Browsers on iPhone, iPad, and Safari on Mac, may clear sign-in keys after a week without use.
-              Use Triauth regularly or keep another device registered.
+              Use triauth regularly or keep another device registered.
+            </template>
+            <template v-else-if="android">
+              This browser may remove your sign-in keys to free space.
+              <template v-if="installAvailableRef || installAccepted">Installing keeps them stored.</template>
+              <template v-else>Add whis website to your home screen from the browser menu to keep them stored.</template>
             </template>
             <template v-else>
               This browser may remove your sign-in keys to free space.
@@ -62,6 +73,8 @@ async function install() {
 
         <a href="#" class="shrink-0 -m-1 p-1 text-gray-400 hover:text-gray-600" aria-label="Dismiss" @click.prevent="dismissBanner"><CloseIcon/></a>
       </div>
+
+      <Button class="w-full mt-3" @click="install" v-if="android && installAvailableRef">Install app</Button>
     </div>
   </Transition>
 
