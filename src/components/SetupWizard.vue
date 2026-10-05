@@ -134,6 +134,9 @@
             </div>
           </div>
         </Message>
+        <Message size="small" severity="warn" variant="simple" class="text-left" v-if="privateWindow">
+          <div class="_status"><InfoIcon class="_info" aria-hidden="true"/>This looks like a private browsing window. Sign-in keys created here would be lost when it closes, so use a normal window instead.</div>
+        </Message>
         <Message size="small" severity="error" variant="simple" class="text-left" v-if="recheck === 'unchanged'">
           <div class="_status"><span>✕</span>The record is not visible yet. DNS changes can take a few minutes to show up. If it has been a while, see the <a href="https://www.triauth.org/identity/troubleshooting#domain-is-not-configured-for-triauth" target="_blank" rel="noopener noreferrer" class="underline">troubleshooting guide</a>.</div>
         </Message>
@@ -141,7 +144,7 @@
           <div class="_status"><span>✕</span>{{identifierError}}</div>
         </Message>
 
-        <Button class="_recheck" severity="help" :loading="recheck === 'pending'" @click="recheckDomain" v-if="canRecheck">Check again</Button>
+        <Button class="_recheck" :loading="recheck === 'pending'" @click="recheckDomain" v-if="canRecheck">Check again</Button>
         <Button class="mt-10" :disabled="!canContinue" @click="next">Continue</Button>
         <Button variant="text" as="a" href="#" size="small" v-if="cancellable">cancel</Button>
         <Button v-for="entry of testIdentitiesRef" :key="entry.identifier" @click="addTestIdentity(entry)" variant="text" as="a">add test identity {{ entry.identifier }}</Button>
@@ -281,7 +284,9 @@
         </Message>
 
         <div class="mb-2 text-center">
-          <Avatar :label="publicProfile.initials || '&nbsp;'" class="mr-2" size="large" shape="circle" />
+          <Avatar :label="publicProfile.initials || null" class="mr-2" size="large" shape="circle">
+            <template #icon><PersonIcon class="_person text-gray-500" aria-hidden="true"/></template>
+          </Avatar>
           <div class="m-4 mt-2 mb-0 mr-6">{{publicProfile.name || '&nbsp;'}}</div>
         </div>
 
@@ -304,14 +309,16 @@
         </Message>
 
         <div class="mb-2 text-center">
-          <Avatar :label="privateProfile.initials || '&nbsp;'" class="mr-2" size="large" shape="circle" :title="privateProfile.initials"/>
+          <Avatar :label="privateProfile.initials || null" class="mr-2" size="large" shape="circle" :title="privateProfile.initials">
+            <template #icon><PersonIcon class="_person text-gray-500" aria-hidden="true"/></template>
+          </Avatar>
           <div class="m-4 mt-2 mb-0 mr-6">{{privateProfile.name || '&nbsp;'}}</div>
           <div class="m-4 mt-0 mr-6 text-sm text-gray-500">{{privateProfile.email || '&nbsp;'}}</div>
         </div>
 
         <InputText v-model="privateProfile.initials" :invalid="privateProfileErrors.initials" placeholder="Your initials" maxlength="2" @keydown.enter.prevent="submitField"/>
         <InputText v-model="privateProfile.name" :invalid="privateProfileErrors.name" placeholder="Name" maxlength="100" @keydown.enter.prevent="submitField"/>
-        <InputText v-model="privateProfile.email" :invalid="privateProfileErrors.email" placeholder="Email address" maxlength="100" @keydown.enter.prevent="submitField"/>
+        <InputText v-model="privateProfile.email" :invalid="privateProfileErrors.email" placeholder="Email address" maxlength="100" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" @input="privateProfile.email = privateProfile.email.toLowerCase()" @keydown.enter.prevent="submitField"/>
 
         <Button @click="next" :disabled="privateProfileErrors.any" class="mt-10" autofocus>{{ (privateProfile.initials || privateProfile.name || privateProfile.email) ? 'Next' : 'Skip' }}</Button>
         <Button @click="prev" variant="text" size="small">&laquo; go back</Button>
@@ -389,6 +396,7 @@ import OpenInNewIcon from '../../vendor/material-icons/OpenInNew.vue';
 import InfoIcon from '../../vendor/material-icons/Info.vue';
 import KeyIcon from '../../vendor/material-icons/Key.vue';
 import PasswordIcon from '../../vendor/material-icons/Password.vue';
+import PersonIcon from '../../vendor/material-icons/Person.vue';
 import SecurityKeyIcon from '../../vendor/material-icons/SecurityKey.vue';
 
 import ContextMenu from "primevue/contextmenu";
@@ -400,7 +408,7 @@ import DefaultSigner from '../signers/default.js';
 import PassphraseSigner from "../signers/passphrase.js";
 import WebauthnSigner from "../signers/webauthn.js";
 
-import {clearBannerDismissal} from "../lib/pwa.js";
+import {clearBannerDismissal, isFirefox, isSafari, isIos} from "../lib/pwa.js";
 
 const STEPS = ['identifier', 'lookupCode', 'device', 'factors', 'publicProfile', 'privateProfile', 'dns'];
 const step = ref(STEPS[0]);
@@ -409,6 +417,26 @@ const cancellable = ref(false);
 db.list('identities').then((ids) => {
   cancellable.value = Object.keys(ids).length > 0;
 });
+
+// Private browsing window: the keys created here vanish when it closes, while the DNS record stays.
+// Firefox and Safari refuse the OPFS root there; Chromium allows it but reports a storage quota below
+// the "usage + 10 GiB" floor every normal profile gets since Chrome 133. Chrome treats incognito
+// detection as a bug, so either signal may vanish with an update; a miss then means no warning.
+const privateWindow = ref(false);
+const detectPrivateWindow = async () => {
+  try {
+    await navigator.storage.getDirectory();
+  } catch (err) {
+    privateWindow.value = ['SecurityError', 'UnknownError'].includes(err.name);
+    return;
+  }
+  // Chromium only: Firefox and WebKit quotas follow the disk size and can sit well below 10 GiB
+  if (!isFirefox() && !isSafari() && !isIos()) {
+    const {quota} = await navigator.storage.estimate();
+    privateWindow.value = quota < 10 * 2 ** 30;
+  }
+};
+detectPrivateWindow();
 
 // Developer convenience: identities listed in the gitignored .private/test-identities.json get a one-click
 // "add test identity" link below the form. The whole branch is dropped from production builds.
@@ -1030,6 +1058,9 @@ const addTestIdentity = async (entry) => {
 ._status { position:relative; padding-left:1.6em; }
 ._status > :first-child { position:absolute; left:0; top:0; }
 ._status > ._info:first-child { top:calc((1lh - 1.125em) / 2); }   /* centred on the first line of text */
+
+/* The empty avatar on the profile steps shows a generic person until initials are typed */
+._person { fill:currentColor; }
 
 /* A button that leaves the app: the "open in new" icon follows the label, in the button's own colour */
 ._ext svg { width:1rem; height:1rem; fill:currentColor; }
