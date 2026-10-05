@@ -213,7 +213,12 @@ async function refreshAttestationTokens() {
 
 let attestPollTimer = null;
 async function refreshAttestationTokensLoop() {
-  await refreshAttestationTokens();
+  try {
+    await refreshAttestationTokens();
+  } catch (err) {
+    // e.g. a read aborted when the browser froze this tab while the provider was open; keep polling
+    Triauth.config.logger.error(err);
+  }
   attestPollTimer = setTimeout(refreshAttestationTokensLoop, 500);
 }
 

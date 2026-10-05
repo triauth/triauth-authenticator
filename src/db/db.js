@@ -13,7 +13,14 @@ export const db = {
   SCHEMA,
 
   _openPromise: null,
+  _db: null,          // the connection _openPromise resolved with, while it is open
+  _opened: false,     // this page has opened the database at least once
+  _active: new Set(), // abort(err) closures of the transactions still running (see _transaction)
   _watchers: [],
+
+  // How long a transaction may take from its creation, the time queued behind other tabs included, before
+  // it is aborted and its promise rejected: a frozen or stuck tab must not block the others for good
+  transactionTimeout: 15e3,
 
   // Cross-tab BroadcastChannel change feed
   _channel: null,
@@ -35,6 +42,11 @@ export const db = {
       const self = this;
       self._channel = new BroadcastChannel('triauth-authenticator-db');
       self._channel.onmessage = function ({data}) {
+        // A hidden page may be frozen (Android Chrome, after a few minutes in the background): this handler
+        // still runs there, but a read started now never finishes and keeps a lock on the store that blocks
+        // the other tabs. Everything watched is re-read once the page is visible again (end of this file).
+        if (document.visibilityState === 'hidden') return;
+
         const stores = Array.isArray(data?.stores) ? data.stores.filter((name) => typeof name === 'string') : [];
         if (stores.length > 0) {
           self._notify(stores, true);
@@ -239,17 +251,41 @@ export const db = {
           return db.close();
         }
 
-        db.onversionchange = function (event) {
-          console.warn('The version of this database has changed, page will reload');
+        self._db = db;
+        self._opened = true;
+
+        // Drops this connection from the memo, so that the next call opens a fresh one
+        const forget = function () {
+          if (self._db === db) {
+            self._db = null;
+            self._openPromise = null;
+          }
+        };
+
+        // The browser closed the connection on its own (e.g. the user cleared the site data)
+        db.onclose = forget;
+
+        // Another tab, running newer code after a deploy, upgrades the database: let it through and pick up
+        // the new code once the user looks at this page (a frozen or hidden page would block the upgrade)
+        db.onversionchange = function () {
+          console.warn('[triauth-authenticator][db] The version of this database has changed, page will reload');
           db.close();
-          return window.location.reload()
+          forget();
+          self._reloadWhenVisible();
         };
 
         return resolve(db);
       };
 
       request.onerror = function (event) {
-        fail(new AppError('Could not open IndexedDB database', {cause: event.target?.error}));
+        const error = event.target?.error;
+        // The database is ahead of this code: another tab upgraded it while this page held no connection
+        // (it was frozen). Only reload when this page did open it before - a first open failing this way
+        // is a rollback, and reloading would loop.
+        if (error?.name === 'VersionError' && self._opened) {
+          self._reloadWhenVisible();
+        }
+        fail(new AppError('Could not open IndexedDB database', {cause: error}));
       };
 
       // Fired when an open connection in another tab blocks this versionchange. That
@@ -265,47 +301,95 @@ export const db = {
     return promise;
   },
 
-  perform: async function (storeName, transactionMode, callbacks, fName, ...fArgs) {
+  // Runs body(transaction, out) in a tracked transaction on the given store(s). body must issue its first
+  // request synchronously (a transaction that goes idle commits empty). Resolves with out.value once the
+  // transaction has committed (watchers are notified after a readwrite commit); rejects when a request
+  // fails, when body throws, when the transaction is aborted (out.error first, then transaction.error) and
+  // when it has not finished within transactionTimeout.
+  _transaction: async function (storeNames, mode, body) {
     const self = this;
+    const db = await self.open(); // a failed open rejects the caller
 
-    return new Promise(async function (resolve, reject) {
-      const db = await self.open();
-
-      const transaction = db.transaction(storeName, transactionMode);
-      const store = transaction.objectStore(storeName);
-
-      const request = store[fName](...fArgs);
-
-      request.onerror = function (event) {
-        callbacks.onerror ? callbacks.onerror(event) : reject(event);
-      };
-
-      if (callbacks.onsuccess) {
-        // Cursor-style iteration (see list()): the caller's handler runs once per
-        // cursor step and resolves the outer promise itself.
-        request.onsuccess = callbacks.onsuccess;
-
-      } else if (transactionMode === 'readwrite') {
-        // Capture the request result (e.g. the generated key from add/put) on
-        // success, but only resolve once the transaction has durably committed.
-        // Note: in oncomplete, event.target is the transaction (its result is
-        // undefined), so request.result is the only place to read the key.
-        // Watchers fire after commit so they re-query committed data.
-        let result;
-        request.onsuccess = function () { result = request.result; };
-        transaction.oncomplete = function () {
-          resolve(result);
-          self._notify([storeName]);
-        };
-
-      } else {
-        request.onsuccess = function () { resolve(request.result); };
+    return new Promise(function (resolve, reject) {
+      let transaction;
+      try {
+        transaction = db.transaction(storeNames, mode);
+      } catch (err) {
+        return reject(err); // an unknown store, or a connection closed in the meantime
       }
 
-      transaction.onabort = function () {
-        reject(transaction.error || new Error('Transaction aborted'));
+      const out = {};
+
+      // Aborts with the given error; the rejection follows in onabort. A transaction that has already
+      // finished throws InvalidStateError here, and has settled the promise by itself.
+      const abort = function (err) {
+        out.error ||= err;
+        try { transaction.abort(); } catch (e) {}
       };
 
+      const timer = setTimeout(function () {
+        abort(new AppError('Another tab or window of the authenticator is keeping its database busy. Close it and try again.'));
+      }, self.transactionTimeout);
+      self._active.add(abort);
+
+      const finish = function () {
+        clearTimeout(timer);
+        self._active.delete(abort);
+      };
+
+      transaction.oncomplete = function () {
+        finish();
+        resolve(out.value);
+        if (mode === 'readwrite') {
+          // Watchers fire after commit so they re-query committed data.
+          self._notify([storeNames].flat());
+        }
+      };
+
+      transaction.onabort = function () {
+        finish();
+        reject(out.error || transaction.error || new Error('Transaction aborted'));
+      };
+
+      try {
+        body(transaction, out);
+      } catch (err) {
+        abort(err);
+      }
+    });
+  },
+
+  // Aborts the transactions still running and closes the memoized connection, so that this page holds no
+  // lock and no connection: a frozen page cannot finish them and would block every other tab. The next
+  // call opens a fresh connection. A pending open() is left alone - it memoizes its connection on success.
+  _close: function () {
+    for (const abort of this._active) {
+      abort(new AppError('The browser paused the authenticator while it was busy. Please try again.'));
+    }
+    if (this._db) {
+      this._db.close();
+      this._db = null;
+      this._openPromise = null;
+    }
+  },
+
+  // The code on this page is stale (another tab upgraded the database): reload now if the page is
+  // visible, otherwise as soon as it is looked at again
+  _reloadWhenVisible: function () {
+    if (document.visibilityState === 'visible') {
+      return window.location.reload();
+    }
+    document.addEventListener('visibilitychange', function () { window.location.reload(); }, {once: true});
+  },
+
+  perform: async function (storeName, transactionMode, callbacks, fName, ...fArgs) {
+    return this._transaction(storeName, transactionMode, function (transaction, out) {
+      const request = transaction.objectStore(storeName)[fName](...fArgs);
+
+      // Cursor-style iteration (see list()): the caller's handler runs once per cursor step and resolves
+      // the outer promise itself. Otherwise the request result (e.g. the key generated by add/put) is what
+      // the transaction resolves with. A failed request aborts the transaction, which rejects.
+      request.onsuccess = callbacks.onsuccess || function () { out.value = request.result; };
     });
   },
 
@@ -324,21 +408,16 @@ export const db = {
     const self = this;
     patchData = self._unwrap(patchData);
 
-    return new Promise(async function (resolve, reject) {
-      const db = await self.open();
-
-      // get + put run in one read-write transaction so the read-modify-write is
-      // atomic. The put must be issued inside the get's onsuccess, while the
-      // transaction is still active (it auto-commits if it goes idle).
-      const transaction = db.transaction(storeName, 'readwrite');
+    // get + put run in one read-write transaction so the read-modify-write is
+    // atomic. The put must be issued inside the get's onsuccess, while the
+    // transaction is still active (it auto-commits if it goes idle).
+    return self._transaction(storeName, 'readwrite', function (transaction, out) {
       const store = transaction.objectStore(storeName);
-
-      let result;
 
       const getRequest = store.get(patchData.id);
       getRequest.onsuccess = function () {
         const obj = getRequest.result;
-        if (!obj) return; // nothing to patch; transaction resolves with undefined
+        if (!obj) return; // nothing to patch; the transaction commits and resolves with undefined
 
         for (const [key, val] of Object.entries(patchData)) {
           obj[key] = val;
@@ -346,22 +425,12 @@ export const db = {
 
         const {valid, errors} = self.validate(storeName, obj);
         if (!valid) {
-          reject(new AppError('Schema validation failed for ' + storeName, {storeName, errors}));
-          transaction.abort();
-          return;
+          out.error = new AppError('Schema validation failed for ' + storeName, {storeName, errors});
+          return transaction.abort();
         }
 
         const putRequest = store.put(obj);
-        putRequest.onsuccess = function () { result = putRequest.result; };
-      };
-
-      transaction.oncomplete = function () {
-        resolve(result);
-        self._notify([storeName]);
-      };
-
-      transaction.onerror = transaction.onabort = function () {
-        reject(transaction.error || new Error('Transaction aborted'));
+        putRequest.onsuccess = function () { out.value = putRequest.result; };
       };
     });
   },
@@ -385,41 +454,22 @@ export const db = {
   // stores carry a (possibly denormalized) reference to the root; there is no
   // transitive resolution.
   deleteCascade: async function (rootStore, id, relations) {
-    const self = this;
-    const db = await self.open();
+    const storeNames = [rootStore, ...Object.keys(relations)];
 
-    return new Promise(function (resolve, reject) {
-      const storeNames = [rootStore, ...Object.keys(relations)];
-      const transaction = db.transaction(storeNames, 'readwrite');
+    return this._transaction(storeNames, 'readwrite', function (transaction) {
+      transaction.objectStore(rootStore).delete(id);
 
-      transaction.oncomplete = function () {
-        resolve();
-        // Watchers fire after commit so they re-query committed data (as in perform()).
-        self._notify(storeNames);
-      };
-
-      transaction.onerror = transaction.onabort = function () {
-        reject(transaction.error || new Error('Transaction aborted'));
-      };
-
-      try {
-        transaction.objectStore(rootStore).delete(id);
-
-        for (const [storeName, indexName] of Object.entries(relations)) {
-          const store = transaction.objectStore(storeName);
-          const keysRequest = store.index(indexName).getAllKeys(IDBKeyRange.only(id));
-          keysRequest.onsuccess = function () {
-            // Issued from a request callback of the same transaction, keeping it active.
-            for (const key of keysRequest.result) {
-              store.delete(key);
-            }
-          };
-        }
-      } catch (err) {
-        // e.g. a relation names an index this database does not have. Abort, so that the root
-        // delete issued above cannot commit on its own and leave the related rows behind.
-        transaction.abort();
-        reject(err);
+      // A relation naming an index this database does not have throws here, and _transaction aborts, so
+      // that the root delete issued above cannot commit on its own and leave the related rows behind.
+      for (const [storeName, indexName] of Object.entries(relations)) {
+        const store = transaction.objectStore(storeName);
+        const keysRequest = store.index(indexName).getAllKeys(IDBKeyRange.only(id));
+        keysRequest.onsuccess = function () {
+          // Issued from a request callback of the same transaction, keeping it active.
+          for (const key of keysRequest.result) {
+            store.delete(key);
+          }
+        };
       }
     });
   },
@@ -449,7 +499,7 @@ export const db = {
 
   list: function (storeName, iterator) {
     const self = this;
-    return new Promise(async function (resolve, reject) {
+    return new Promise(function (resolve, reject) {
       let retval = {};
 
       const onsuccess = (event) => {
@@ -516,7 +566,11 @@ export const db = {
           }
         }
 
-      })
+      }).catch(function (err) {
+        // e.g. the read timed out behind another tab or was aborted when the browser froze this page;
+        // the next change, or the page becoming visible, re-runs it
+        console.warn('[triauth-authenticator][db] Could not refresh the ' + storeName + ' watcher', err);
+      });
     }
 
     const stopVueWatch = constraints ? watch(reactive(constraints), () => watcher.eval()) : null;
@@ -547,3 +601,12 @@ export const db = {
     return Object.values(await this.list(storeName, constraints))[0];
   }
 };
+
+// Page Lifecycle: hold no lock and no connection while the browser freezes this page, and refresh what is
+// watched when the page is looked at again (changes made by other tabs are ignored while it is hidden)
+document.addEventListener('freeze', function () { db._close(); });
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible') {
+    db._notify(Object.keys(db._watchers), true);
+  }
+});
