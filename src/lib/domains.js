@@ -1,0 +1,79 @@
+/*
+ * Triauth Authenticator - Copyright (c) 2026 The Triauth Authors (https://www.triauth.org/)
+ * Licensed under the Elastic License 2.0; see LICENSE.txt for the full text.
+ * SPDX-License-Identifier: Elastic-2.0
+ */
+
+// Domain-name policy shared by the setup wizard and the request parser (helpers.js).
+
+// Sortlist of registries that sell names one level below the TLD
+export const SECOND_LEVEL_SUFFIXES = [
+  'co.uk', 'org.uk', 'me.uk', 'ltd.uk', 'plc.uk',
+  'com.br', 'net.br', 'org.br',
+  'com.au', 'net.au', 'org.au', 'id.au',
+  'co.za', 'org.za', 'net.za', 'web.za',
+  'com.tr', 'net.tr', 'org.tr', 'gen.tr', 'web.tr',
+  'com.mx', 'org.mx', 'net.mx',
+  'co.kr', 'or.kr', 'ne.kr', 'pe.kr',
+  'com.ar', 'net.ar', 'org.ar',
+  'co.nz', 'net.nz', 'org.nz', 'geek.nz', 'gen.nz', 'kiwi.nz',
+  'my.id', 'co.id', 'web.id', 'biz.id', 'or.id',
+  'co.jp', 'ne.jp', 'or.jp', 'gr.jp',
+  'com.pl', 'net.pl', 'org.pl', 'biz.pl', 'info.pl',
+  'co.il', 'org.il', 'net.il',
+  'com.ua', 'net.ua', 'org.ua', 'in.ua',
+  'com.cn', 'net.cn', 'org.cn',
+  'co.in', 'net.in', 'org.in', 'firm.in', 'gen.in', 'ind.in',
+  'com.tw', 'net.tw', 'org.tw', 'idv.tw',
+  'com.vn', 'net.vn', 'org.vn',
+  'co.th', 'in.th', 'or.th',
+  'com.my', 'net.my', 'org.my', 'com.sg', 'net.sg', 'org.sg', 'per.sg', 'com.hk', 'net.hk', 'org.hk', 'idv.hk', 'com.ph',
+  'co.ke', 'or.ke', 'com.ng', 'org.ng', 'net.ng', 'com.eg', 'com.sa', 'com.pk', 'com.bd', 'com.np', 'com.kh',
+  'com.co', 'com.pe', 'com.ec', 'com.uy', 'com.ve', 'com.do', 'com.gt', 'co.cr', 'com.bo', 'com.py'
+];
+export const isRegistrable = (domain) => {
+  const parent = domain.split('.').slice(1).join('.');
+  return !parent.includes('.') || SECOND_LEVEL_SUFFIXES.includes(parent);
+};
+
+// The identifier domains this instance serves.
+// Operator setting injected at build time:
+//
+//   VITE_SERVED_DOMAINS=example.com               an entry covers the domain and everything under it,
+//                                                 here john@example.com and john@sales.example.com
+//   VITE_SERVED_DOMAINS=example.com example.org   several entries, separated by spaces or commas
+//   VITE_SERVED_DOMAINS=*                         every domain; the reference instance sets this
+//
+// Unset, the instance serves the domain it lives under (auth.example.com serves example.com)
+// A host that is itself a registrable domain serves itself rather than its public suffix.
+// Development hosts (localhost, IP literals) serve everything.
+//
+// Identifiers under any other domain are refused by the wizard and by every flow page: the keys live under
+// this origin, so whoever runs it is the custodian of every identity it serves.
+
+export const parseServedDomains = (value) => {
+  const entries = [];
+  for (const entry of String(value || '').toLowerCase().split(/[\s,]+/)) {
+    if (!entry) continue;
+    if (entry === '*' || Triauth.Helpers.isDomainName(entry)) entries.push(entry);
+    else console.warn(`Ignoring configured served domain that is not a domain name: ${entry}`);
+  }
+  return entries;
+};
+
+export const defaultServedDomains = (hostname) => {
+  if (!Triauth.Helpers.isDomainName(hostname)) return ['*'];
+  return [isRegistrable(hostname) ? hostname : hostname.split('.').slice(1).join('.')];
+};
+
+export const SERVED_DOMAINS = (() => {
+  const configured = parseServedDomains(import.meta.env.VITE_SERVED_DOMAINS);
+  return configured.length ? configured : defaultServedDomains(window.location.hostname);
+})();
+
+export const servesDomain = (domain) => {
+  domain = String(domain || '').toLowerCase();
+  return SERVED_DOMAINS.some((entry) => entry === '*' || domain === entry || domain.endsWith('.' + entry));
+};
+
+export const NOT_SERVED_MESSAGE = `This authenticator only serves identifiers under ${SERVED_DOMAINS.join(', ')}`;

@@ -15,9 +15,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# Build the multi-page static app into /app/dist. The legal-document links are baked
-# in at build time — pass --build-arg VITE_TERMS_OF_SERVICE_URL=... / VITE_PRIVACY_POLICY_URL=...
-# to have your instance link to your own documents (see the README's "Self-hosting" section).
+# Build the multi-page static app into /app/dist. The operator settings are baked in at build time.
+# Pass them as --build-arg VITE_SERVED_DOMAINS=... / VITE_TERMS_OF_SERVICE_URL=... / VITE_PRIVACY_POLICY_URL=...
+# (see the README's "Configuration" section).
+ARG VITE_SERVED_DOMAINS
 ARG VITE_TERMS_OF_SERVICE_URL
 ARG VITE_PRIVACY_POLICY_URL
 COPY . .

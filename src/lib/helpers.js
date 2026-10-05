@@ -6,6 +6,7 @@
 
 import { db } from '../db/db.js'
 import {AppError} from "./errors.js";
+import {servesDomain, NOT_SERVED_MESSAGE} from "./domains.js";
 
 export const Helpers = {
 
@@ -78,6 +79,11 @@ export const Helpers = {
     }
 
     const identifier = challenge.identity.identifier;
+
+    // An operator setting (domains.js): this instance signs only for the domains it serves
+    if (!servesDomain(identifier.split('@')[1])) {
+      throw new AppError(NOT_SERVED_MESSAGE, {identifier});
+    }
 
     return {
       params,

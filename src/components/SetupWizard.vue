@@ -273,7 +273,7 @@
 
     <div v-if="step === 'publicProfile'">
       <div class="flex flex-col gap-3">
-        <h2 class="text-xl font-bold text-left">Setup your public profile <sup>*</sup></h2>
+        <h2 class="text-xl font-bold text-left">Set up your public profile <span class="font-normal text-gray-500">(optional)</span></h2>
 
         <Message size="small" severity="secondary" variant="simple" class="text-left mb-8">
           You can associate certain public details with your identifier.
@@ -295,7 +295,7 @@
 
     <div v-if="step === 'privateProfile'">
       <div class="flex flex-col gap-3">
-        <h2 class="text-xl font-bold text-left">Setup your private profile <sup>*</sup></h2>
+        <h2 class="text-xl font-bold text-left">Set up your private profile <span class="font-normal text-gray-500">(optional)</span></h2>
 
         <Message size="small" severity="secondary" variant="simple" class="text-left mb-8">
           Your private profile will be stored on this device.
@@ -382,6 +382,7 @@ import {ref, computed, watch, nextTick, shallowRef, reactive, onMounted, onUnmou
 import { useDebounceFn } from '@vueuse/core';
 import { db } from '../db/db.js'
 import { Helpers } from '../lib/helpers.js'
+import { isRegistrable, servesDomain, NOT_SERVED_MESSAGE } from '../lib/domains.js'
 
 import CloseIcon from '../../vendor/material-icons/Close.vue';
 import OpenInNewIcon from '../../vendor/material-icons/OpenInNew.vue';
@@ -545,6 +546,11 @@ const validateIdentifier = async () => {
 
   identifierError.value = Triauth.validate({identifier:identifier.value}, triauthConfig).errors[0]?.message;
 
+  // An operator setting (domains.js): identifiers under other domains stop here, before any DNS lookup
+  if (!identifierError.value && !servesDomain(identifier.value.split('@')[1])) {
+    identifierError.value = NOT_SERVED_MESSAGE;
+  }
+
   const configuredIdentifiers = await db.list('identities');
   if (
       !identifierError.value &&
@@ -555,36 +561,6 @@ const validateIdentifier = async () => {
 
   whoisIdentifier();
 }
-
-// Sortlist of registries that sell names one level below the TLD
-const SECOND_LEVEL_SUFFIXES = [
-  'co.uk', 'org.uk', 'me.uk', 'ltd.uk', 'plc.uk',
-  'com.br', 'net.br', 'org.br',
-  'com.au', 'net.au', 'org.au', 'id.au',
-  'co.za', 'org.za', 'net.za', 'web.za',
-  'com.tr', 'net.tr', 'org.tr', 'gen.tr', 'web.tr',
-  'com.mx', 'org.mx', 'net.mx',
-  'co.kr', 'or.kr', 'ne.kr', 'pe.kr',
-  'com.ar', 'net.ar', 'org.ar',
-  'co.nz', 'net.nz', 'org.nz', 'geek.nz', 'gen.nz', 'kiwi.nz',
-  'my.id', 'co.id', 'web.id', 'biz.id', 'or.id',
-  'co.jp', 'ne.jp', 'or.jp', 'gr.jp',
-  'com.pl', 'net.pl', 'org.pl', 'biz.pl', 'info.pl',
-  'co.il', 'org.il', 'net.il',
-  'com.ua', 'net.ua', 'org.ua', 'in.ua',
-  'com.cn', 'net.cn', 'org.cn',
-  'co.in', 'net.in', 'org.in', 'firm.in', 'gen.in', 'ind.in',
-  'com.tw', 'net.tw', 'org.tw', 'idv.tw',
-  'com.vn', 'net.vn', 'org.vn',
-  'co.th', 'in.th', 'or.th',
-  'com.my', 'net.my', 'org.my', 'com.sg', 'net.sg', 'org.sg', 'per.sg', 'com.hk', 'net.hk', 'org.hk', 'idv.hk', 'com.ph',
-  'co.ke', 'or.ke', 'com.ng', 'org.ng', 'net.ng', 'com.eg', 'com.sa', 'com.pk', 'com.bd', 'com.np', 'com.kh',
-  'com.co', 'com.pe', 'com.ec', 'com.uy', 'com.ve', 'com.do', 'com.gt', 'co.cr', 'com.bo', 'com.py'
-];
-const isRegistrable = (domain) => {
-  const parent = domain.split('.').slice(1).join('.');
-  return !parent.includes('.') || SECOND_LEVEL_SUFFIXES.includes(parent);
-};
 
 // Known DNS hosts, told apart by the primary nameserver of a zone
 const DNS_HOSTS = [
