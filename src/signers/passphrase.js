@@ -5,6 +5,7 @@
  */
 
 import BaseSigner from "./base.js";
+import { AppError } from "../lib/errors.js";
 import { promptPassphrase } from "../lib/passphrasePrompt.js";
 
 // Current PBKDF2 work factor (the OWASP floor for PBKDF2-HMAC-SHA256). Stored per key
@@ -13,6 +14,25 @@ const PBKDF2_ITERATIONS = 600_000;
 
 // Minimum passphrase length, enforced in the prompt UI and again here at key creation.
 const MIN_PASSPHRASE_LENGTH = 8;
+
+// The PBKDF2-derived AES-GCM key that wraps the private key; shared by setup() and sign()
+async function deriveWrappingKey(passphrase, salt, iterations) {
+  const passphraseKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    passphraseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['wrapKey', 'unwrapKey']
+  );
+}
 
 class PassphraseSigner extends BaseSigner {
 
@@ -37,33 +57,18 @@ class PassphraseSigner extends BaseSigner {
       throw new Error('Passphrase too short');
     }
 
-    // 1. Import the passphrase as a PBKDF2 key
-    const passphraseKey = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(passphrase),
-      'PBKDF2',
-      false,
-      ['deriveKey']
-    );
-
-    // 2. Derive an AES wrapping key from the passphrase
+    // 1. Derive an AES wrapping key from the passphrase
     const salt = crypto.getRandomValues(new Uint8Array(16));
-    const wrappingKey = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
-      passphraseKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['wrapKey', 'unwrapKey']
-    );
+    const wrappingKey = await deriveWrappingKey(passphrase, salt, PBKDF2_ITERATIONS);
 
-    // 3. Generate the ECDSA key pair (private key is extractable, but not stored)
+    // 2. Generate the ECDSA key pair (private key is extractable, but not stored)
     const keyPair = await crypto.subtle.generateKey(
       { name: 'ECDSA', namedCurve: 'P-256' },
       true, // must be extractable to avoid InvalidAccessError: key is not extractable
       ['sign', 'verify']
     );
 
-    // 4. Wrap (encrypt) the private key with the password-derived key
+    // 3. Wrap (encrypt) the private key with the password-derived key
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const wrappedPrivateKey = await crypto.subtle.wrapKey(
       'pkcs8',
@@ -79,53 +84,47 @@ class PassphraseSigner extends BaseSigner {
   }
 
   async sign(message, context, signedData, unsignedData) {
+    const privateKey = await this.unlockPrivateKey();
 
-    const passphrase = await promptPassphrase({ title: 'Enter your passphrase' });
-    if (passphrase === null) {
-      throw new Error('User aborted');
-    }
-
-    // 1. Import the passphrase as a PBKDF2 key
-    const passphraseKey = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(passphrase),
-      'PBKDF2',
-      false,
-      ['deriveKey']
-    );
-
-    // 2. Derive an AES wrapping key from the passphrase
-    const salt = this.data.salt;
-    const iterations = this.data.iterations || PBKDF2_ITERATIONS; // fallback for keys made before iterations were stored
-    const wrappingKey = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
-      passphraseKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['wrapKey', 'unwrapKey']
-    );
-
-    const privateKey = await crypto.subtle.unwrapKey(
-      'pkcs8',
-      this.data.wrappedPrivateKey,
-      wrappingKey,
-      { name: 'AES-GCM', iv: this.data.iv },
-      { name: 'ECDSA', namedCurve: 'P-256' },
-      false, // <-- make the privateKey non-extractable after unwrapping
-      ['sign']
-    );
-
-    const signature = await window.crypto.subtle.sign(
-      {
-        name: 'ECDSA',
-        namedCurve: 'P-256',
-        hash: 'SHA-256'
-      },
+    const signature = await crypto.subtle.sign(
+      { name: 'ECDSA', hash: 'SHA-256' },
       privateKey,
       message
     );
 
     return Triauth.Helpers.arrayBufferToBase64Url(signature);
+  }
+
+  // Asks for the passphrase until it unwraps the stored private key. A wrong passphrase makes
+  // AES-GCM fail its authentication check (OperationError), which re-opens the prompt with a hint.
+  // Anything else is an unexpected error and propagates.
+  async unlockPrivateKey() {
+    let error = null;
+
+    while (true) {
+      const passphrase = await promptPassphrase({ title: 'Enter your passphrase', error });
+      if (passphrase === null) {
+        throw new AppError('The passphrase prompt was cancelled, so the request was not signed');
+      }
+
+      const iterations = this.data.iterations || PBKDF2_ITERATIONS; // fallback for keys made before iterations were stored
+      const wrappingKey = await deriveWrappingKey(passphrase, this.data.salt, iterations);
+
+      try {
+        return await crypto.subtle.unwrapKey(
+          'pkcs8',
+          this.data.wrappedPrivateKey,
+          wrappingKey,
+          { name: 'AES-GCM', iv: this.data.iv },
+          { name: 'ECDSA', namedCurve: 'P-256' },
+          false, // <-- make the privateKey non-extractable after unwrapping
+          ['sign']
+        );
+      } catch (err) {
+        if (err.name !== 'OperationError') throw err;
+        error = 'Wrong passphrase, try again';
+      }
+    }
   }
 
   publishableKeyOptions() {

@@ -27,10 +27,12 @@ const canSubmit = computed(() => {
   return true; // unlock: any non-empty (length is only enforced when creating)
 });
 
-// One compact line under the fields (confirm/create mode): the validation status when
-// relevant, otherwise the tip. Same font-size for all states so it stays small and the
-// dialog height doesn't change. Priority: length, then match.
+// One compact line under the fields: the hint of a failed previous attempt when the request
+// carries one, otherwise (confirm/create mode) the validation status when relevant, otherwise
+// the tip. Same font-size for all states so it stays small and the dialog height doesn't
+// change. Priority: hint, length, then match.
 const line = computed(() => {
+  if (state.request?.error) return { color: 'text-red-600', text: state.request.error };
   if (!isConfirm.value) return null;
   if (tooShort.value) return { color: 'text-gray-500', text: `Use at least ${minLength.value} characters` };
   if (mismatch.value) return { color: 'text-red-600',  text: "Passphrases don't match" };
@@ -112,9 +114,8 @@ function cancel() { _settlePassphrase(null); }
         </button>
       </div>
 
-      <!-- One compact line: validation status when present, otherwise the tip. Always
-           present in confirm mode (single line, same size) so the dialog doesn't jump. -->
-      <small v-if="isConfirm" class="pp-line" :class="line?.color">{{ line?.text }}</small>
+      <!-- One compact line: the hint, the validation status, or the tip. -->
+      <small v-if="line" class="pp-line" :class="line.color">{{ line.text }}</small>
     </div>
     <template #footer>
       <div class="flex gap-2 w-full">

@@ -23,13 +23,13 @@ export function registerPassphraseHost() {
 }
 
 // Resolves with the entered passphrase, or null if the user cancels.
-export function promptPassphrase({ title, confirm = false, minLength = 0 } = {}) {
+export function promptPassphrase({ title, confirm = false, minLength = 0, error = null } = {}) {
   if (hostCount === 0) {
     return Promise.reject(new Error('Passphrase entry is not available in this context'));
   }
   return new Promise((resolve) => {
     resolveActive = resolve;
-    passphrasePromptState.request = { title, confirm, minLength };
+    passphrasePromptState.request = { title, confirm, minLength, error };
   });
 }
 
