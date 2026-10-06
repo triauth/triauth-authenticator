@@ -15,7 +15,7 @@ import MoreVertIcon from '../../vendor/material-icons/MoreVert.vue';
 import { db } from '../db/db.js'
 import { Helpers } from '../lib/helpers.js'
 import { confetti } from '../lib/confetti.js'
-import { isAndroid, isStandalone } from '../lib/pwa.js'
+import { isAndroid, isStandalone, installAvailableRef, promptInstall } from '../lib/pwa.js'
 
 const identifierRef = ref(null);
 const identityRef = ref(null);
@@ -75,7 +75,8 @@ const lookupCodeVisible = ref(false);
 
 const contextMenuItems = [
   { label: 'Show lookup code', visible: () => !!identityRef.value?.lookupCode, command: () => lookupCodeVisible.value = true },
-  { label: 'Exit', command: () => window.location = '#' }
+  { label: 'Install app', visible: () => isAndroid() && !isStandalone() && installAvailableRef.value, command: () => promptInstall() },
+  { label: 'All identities', command: () => window.location = '#index' }
 ]
 
 const showContextMenu = (event) => {
@@ -121,7 +122,7 @@ function websiteIconSrc(website) {
   <div v-if="identityRef">
     <Toolbar class="rounded-4xl min-w-[100vw]">
       <template #start>
-        <a href="#" class="size-6 text-xl text-center ml-2 cursor-pointer"><strong>⠕</strong></a>
+        <a href="#index" class="size-6 text-xl text-center ml-2 cursor-pointer"><strong>⠕</strong></a>
       </template>
 
       <template #end>

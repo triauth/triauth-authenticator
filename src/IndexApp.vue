@@ -21,12 +21,23 @@ const currentView = shallowRef(null);
 
 const onHashChange = () => {
   try {
-    const path = Helpers.hashPath(window.location) || 'index';
+    const path = Helpers.hashPath(window.location);
     const params = Helpers.urlFragmentParams(window.location);
     const termsAccepted = window.localStorage.getItem('termsAcceptedAt');
 
     if(!termsAccepted) {
       currentView.value = WelcomePage;
+      return;
+    }
+
+    // The bare URL is the entry point (the installed app's start_url, a bookmark, a typed address): a single identity
+    // opens directly, several show the list, none start the setup.
+    if (!path) {
+      db.list('identities').then((ids) => {
+        if (Helpers.hashPath(window.location)) return;   // the user moved on in the meantime
+        const identities = Object.values(ids);
+        window.location.replace(identities.length === 1 ? '#' + identities[0].identifier : identities.length ? '#index' : '#setup');
+      }).catch(() => window.location.replace('#index'));
       return;
     }
 

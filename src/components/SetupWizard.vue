@@ -8,11 +8,11 @@
 
   <div class="pt-12 md:pt-20 pl-10 pr-10 pb-10 md:pl-20 md:pr-20 my-[10vw] md:my-[10vh] m-auto rounded-lg border border-gray-200 bg-white shadow relative container md:min-w-[720px] md:max-w-[720px] min-w-[80vw] max-w-[80vw]">
     <div style="position:absolute;top:0;left:0;">
-      <a href="#" class="p-4 block">⠕</a>
+      <a href="#index" class="p-4 block">⠕</a>
     </div>
 
     <div style="position:absolute;top:0;right:0;">
-      <a href="#" class="p-4 block" v-if="cancellable"><CloseIcon/></a>
+      <a href="#index" class="p-4 block" v-if="cancellable"><CloseIcon/></a>
     </div>
     <div v-if="step === 'identifier'">
       <div class="flex flex-col gap-3">
@@ -148,7 +148,7 @@
 
         <Button class="_recheck" :loading="recheck === 'pending'" @click="recheckDomain" v-if="canRecheck">Check again</Button>
         <Button class="mt-10" :disabled="!canContinue" @click="next">Continue</Button>
-        <Button variant="text" as="a" href="#" size="small" v-if="cancellable">cancel</Button>
+        <Button variant="text" as="a" href="#index" size="small" v-if="cancellable">cancel</Button>
         <Button v-for="entry of testIdentitiesRef" :key="entry.identifier" @click="addTestIdentity(entry)" variant="text" as="a">add test identity {{ entry.identifier }}</Button>
       </div>
 
@@ -537,7 +537,7 @@ const next = () => go(1);
 const prev = () => go(-1);
 
 const close = () => {
-  window.location.href = '#';
+  window.location.href = '#index';
 };
 
 // Show the unsaved changes warning when user attempts to reload the page while the wizard is active
