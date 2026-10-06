@@ -74,9 +74,6 @@ app.component('Button', Button);
 import InputText from 'primevue/inputtext';
 app.component('InputText', InputText);
 
-import Checkbox from 'primevue/checkbox';
-app.component('Checkbox', Checkbox);
-
 import Message from 'primevue/message';
 app.component('Message', Message);
 

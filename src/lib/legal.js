@@ -29,7 +29,8 @@ const httpsUrlOrNull = (value) => {
 
 export const TERMS_URL = httpsUrlOrNull(import.meta.env.VITE_TERMS_OF_SERVICE_URL);
 export const PRIVACY_URL = httpsUrlOrNull(import.meta.env.VITE_PRIVACY_POLICY_URL);
+export const IS_OFFICIAL_INSTANCE = (window.location.hostname === 'auth.triauth.org' || import.meta.env.VITE_OFFICIAL_INSTANCE === 'true')
 
 // The official instance must present both documents: a build that reaches auth.triauth.org
 // without them is a deployment mistake, so the welcome page refuses to let anyone in.
-export const LEGAL_MISCONFIGURED = window.location.hostname === 'auth.triauth.org' && !(TERMS_URL && PRIVACY_URL);
+export const LEGAL_MISCONFIGURED = IS_OFFICIAL_INSTANCE && (TERMS_URL !== 'https://www.triauth.org/legal/terms' || PRIVACY_URL !== 'https://www.triauth.org/legal/privacy');

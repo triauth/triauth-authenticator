@@ -5,18 +5,11 @@
 -->
 
 <script setup>
-import {ref, computed} from "vue";
-import {TERMS_URL, PRIVACY_URL, LEGAL_MISCONFIGURED} from "../lib/legal.js";
+import {TERMS_URL, PRIVACY_URL, IS_OFFICIAL_INSTANCE, LEGAL_MISCONFIGURED} from "../lib/legal.js";
 
 const consentRequired = Boolean(TERMS_URL || PRIVACY_URL);
 
-const termsCheckbox = ref(false);
-
-const consentGiven = computed(() => !consentRequired || termsCheckbox.value?.[0] === 'yes');
-
 const getStarted = () => {
-  if (!consentGiven.value) return;
-
   window.localStorage.setItem('termsAcceptedAt', Date.now());
   if (TERMS_URL) window.localStorage.setItem('acceptedTermsUrl', TERMS_URL);
   if (PRIVACY_URL) window.localStorage.setItem('acceptedPrivacyUrl', PRIVACY_URL);
@@ -65,21 +58,23 @@ const getStarted = () => {
         </p>
 
         <template v-else>
-          <div v-if="consentRequired" class="flex items-start gap-2 mt-10">
-            <Checkbox v-model="termsCheckbox" inputId="termsAccepted" name="termsAccepted" value="yes" class="mt-1" />
-            <label for="termsAccepted">
-              I have read and agree to the
-              <a v-if="TERMS_URL" :href="TERMS_URL" target="_blank" rel="noopener noreferrer" class="underline">Terms of Service</a><template v-if="TERMS_URL && PRIVACY_URL"> and </template><a v-if="PRIVACY_URL" :href="PRIVACY_URL" target="_blank" rel="noopener noreferrer" class="underline">Privacy Policy</a>.
-            </label>
-          </div>
-
-          <div class="text-center mt-8">
-            <Button :disabled="!consentGiven" style="width:75%;" @click.prevent="getStarted">Get started</Button>
+          <div class="mt-8 text-center">
+            <p v-if="consentRequired" id="legal-notice" class="mb-5 text-sm text-gray-700">
+              By clicking the button below you agree to
+              <template v-if="TERMS_URL"><a :href="TERMS_URL" target="_blank" rel="noopener noreferrer" class="underline text-gray-800">terms of service</a></template>
+              <template v-if="TERMS_URL && PRIVACY_URL"> and </template>
+              <template v-if="PRIVACY_URL"><a :href="PRIVACY_URL" target="_blank" rel="noopener noreferrer" class="underline text-gray-800">privacy policy</a></template>.
+            </p>
+            <Button :aria-describedby="consentRequired ? 'legal-notice' : null" style="width:75%;" @click.prevent="getStarted">Get started</Button>
           </div>
         </template>
 
-        <p class="text-xs text-gray-400 mt-8 text-justify leading-5">
-          Triauth Authenticator is provided “as is”, without warranty of any kind; to the maximum
+        <p v-if="IS_OFFICIAL_INSTANCE" class="text-xs text-gray-400 mt-5 text-center leading-5">
+          or <a href="https://github.com/triauth/triauth-authenticator#self-hosting" rel="noopener noreferrer" target="_blank" class="underline">self-host triauth authenticator</a> <span class="whitespace-nowrap">under your own domain</span>
+        </p>
+
+        <p v-else class="text-xs text-gray-400 mt-8 text-justify leading-5">
+          <a href="https://github.com/triauth/triauth-authenticator" rel="noopener noreferrer" target="_blank" class="underline">Triauth Authenticator</a> is provided “as is”, without warranty of any kind; to the maximum
           extent permitted by law, its authors accept no liability for any loss or damage arising
           from its use. See the <a href="/LICENSE.txt" class="underline">LICENSE.txt</a> for the specific language governing permissions and
           limitations under the License.
