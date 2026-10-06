@@ -2,7 +2,7 @@
   "name": "triauth-authenticator",
   "private": true,
   "license": "Elastic-2.0",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.2",
   "description": "The authenticator app for triauth. Sign in to websites with just a click, no passwords. Your keys stay on your device. Ready to use at auth.triauth.org.",
   "homepage": "https://auth.triauth.org/",
   "type": "module",
