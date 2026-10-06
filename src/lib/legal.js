@@ -29,7 +29,9 @@ const httpsUrlOrNull = (value) => {
 
 export const TERMS_URL = httpsUrlOrNull(import.meta.env.VITE_TERMS_OF_SERVICE_URL);
 export const PRIVACY_URL = httpsUrlOrNull(import.meta.env.VITE_PRIVACY_POLICY_URL);
-export const IS_OFFICIAL_INSTANCE = (window.location.hostname === 'auth.triauth.org' || import.meta.env.VITE_OFFICIAL_INSTANCE === 'true')
+
+// Do not set or modify the VITE_OFFICIAL_INSTANCE when self-hosting
+export const IS_OFFICIAL_INSTANCE = (window.location.hostname === 'auth.triauth.org' || import.meta.env.VITE_OFFICIAL_INSTANCE === 'true');
 
 // The official instance must present both documents: a build that reaches auth.triauth.org
 // without them is a deployment mistake, so the welcome page refuses to let anyone in.

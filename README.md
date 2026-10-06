@@ -78,27 +78,6 @@ If you prefer to self-host Triauth Authenticator, you have the following options
 >
 > Finally, ensure your server or host serves files with a secure set of HTTP headers - see [`_headers`](public/_headers) for how they should look.
 
-### Configuration
-
-The app reads a few settings when it is built. Set them in the build settings of your hosting service, pass them to Docker with `--build-arg`, or put them in a `.env` file next to `package.json` before running `npm run build`.
-
-**Which domains the instance serves**
-
-```
-VITE_SERVED_DOMAINS=example.com
-```
-
-The setup guide and the sign-in pages refuse identifiers under any other domain. An entry also covers its subdomains, so `example.com` serves both `john@example.com` and `john@sales.example.com`. Separate several entries with spaces or commas, or use `*` to serve every domain. When the variable is not set, the instance serves the domain it lives under: `auth.example.com` serves `example.com`.
-
-**Your terms of service and privacy policy**
-
-```
-VITE_TERMS_OF_SERVICE_URL=https://www.example.com/legal/terms
-VITE_PRIVACY_POLICY_URL=https://www.example.com/legal/privacy
-```
-
-The welcome page asks everyone to accept the linked documents on their first visit, and the footer links to them. When they are not set, no documents are linked and nobody is asked to accept anything.
-
 ### Option A: Managed static host (e.g. Cloudflare)
 
 Connect your host to this repository's `production` branch with build command `npm run build` and output directory `dist`, or use the button below:
@@ -145,7 +124,29 @@ mkdir -p /var/www/triauth-authenticator && tar -xzf triauth-authenticator-*.tar.
 # then serve /var/www/triauth-authenticator (or the other dir you've picked) at the root of your instance over HTTPS
 ```
 
-A prebuilt release is built without the settings above. It serves the domain it lives under and links no legal documents. Build from source to change either.
+### Configuration
+
+The app reads a few settings when it is built. 
+Set them in the build settings of your hosting service, pass them to Docker with `--build-arg`, or put them in a `.env` file next to `package.json` before running `npm run build`.
+
+**Which domains the instance serves**
+
+```
+VITE_SERVED_DOMAINS=example.com
+```
+
+The setup guide and the sign-in pages refuse identifiers under any other domain. An entry also covers its subdomains, so `example.com` serves both `john@example.com` and `john@sales.example.com`. 
+Separate several entries with spaces or commas, or use `*` to serve every domain. 
+When the variable is not set, the instance serves the domain it lives under: `auth.example.com` serves `example.com`.
+
+**Your terms of service and privacy policy**
+
+```
+VITE_TERMS_OF_SERVICE_URL=https://www.example.com/legal/terms
+VITE_PRIVACY_POLICY_URL=https://www.example.com/legal/privacy
+```
+
+If set, the welcome page asks to agree to the linked documents on the first visit, and the footer links to them.
 
 ## Copyright and license
 
