@@ -524,10 +524,12 @@ const submitField = (e) => {
   }
 };
 
-// The lookup-code step exists only for private-mode domains, decided at each transition
+// Two steps depend on the domain's mode, decided at each transition: the lookup code exists only for
+// private-mode domains, and the public profile is shown only for public-mode ones
+const skipped = (s) => (s === 'lookupCode' && !isPrivate.value) || (s === 'publicProfile' && isPrivate.value);
 const go = (dir) => {
   let i = STEPS.indexOf(step.value) + dir;
-  if (STEPS[i] === 'lookupCode' && !isPrivate.value) i += dir;
+  while (skipped(STEPS[i])) i += dir;
   step.value = STEPS[i];
   autofocus();
 };
@@ -893,8 +895,8 @@ const dnsRecords = function(){
     entries.toAdd.push(`commit ${identityWhois.value.commitment}`);
   }
 
-  // Public profile entries
-  const publicProfileKeys = ['initials', 'name'];
+  // Public profile entries. A private-mode setup has no public profile step.
+  const publicProfileKeys = isPrivate.value ? [] : ['initials', 'name'];
   for (const k of publicProfileKeys) {
     const existingValue = identityWhois.value?.publicProfile?.[k];
     const newValue = publicProfile[k];
