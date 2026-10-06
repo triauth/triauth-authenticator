@@ -20,7 +20,7 @@
         <label for="identifier" class="text-left">Your Identifier</label>
         <InputText id="identifier" v-model="identifier" @input="validateIdentifier" @keydown.enter.prevent="submitField" @keydown.esc.prevent="close" aria-describedby="identifier-help" placeholder="e.g., john@example.com" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus/>
         <Message size="small" severity="secondary" variant="simple" class="text-left min-w-0" :pt="{contentWrapper: {class: 'min-w-0'}, text: {class: 'min-w-0 grow'}}" v-if="!identifierError" id="identifier-help">
-          <div v-if="!identifier" style="font-weight:normal;line-height: 1.75em;">
+          <div v-if="!identifier" style="line-height: 1.75em;">
             <p>You will use this identifier to sign in to websites through this web browser.</p>
             <p class="mt-2">New to triauth? <a href="https://www.triauth.org/identity/get-started" target="_blank" rel="noopener noreferrer" class="underline inline-block">See what you need to get started.</a></p>
           </div>
@@ -224,8 +224,8 @@
             <span>✕</span>{{deviceNameError}}
           </div>
           <div v-else-if="!deviceName">
-            How would you like to call this device?<br/>
-            This name will be publicly visible in your identity records.
+            <p>How would you like to call this device?</p>
+            <p class="mt-2">This name will be publicly visible in your identity records.</p>
           </div>
           <div class="_status" v-else-if="deviceNameExists">
             <span>✕</span>A device with this name already exists
@@ -778,6 +778,12 @@ watch([deviceName, identityWhois], () => {
 
 const validateDeviceName = () => {
   deviceName.value = deviceName.value.toLowerCase();
+
+  if (deviceName.value === '') {
+    deviceNameError.value = null;
+    return;
+  }
+
   deviceNameError.value = Triauth.validate({deviceName:deviceName.value}, triauthConfig).errors[0]?.message;
 }
 
