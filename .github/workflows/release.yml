@@ -2,12 +2,13 @@ name: release
 
 # Builds a verifiable, prebuilt static bundle and attaches it to a GitHub Release.
 # Trigger by pushing a version tag, e.g.:
-#   git tag v1.0.0-beta.1 && git push origin v1.0.0-beta.1
+#   git tag -s v1.0.0-beta.2 -m v1.0.0-beta.2 && git push origin v1.0.0-beta.2
+# Signed (annotated) tags are fine: the checkout peels them to the tagged commit, and
+# the attestation records that commit (checked for v1.0.0-beta.1 and v1.0.0-beta.2).
 #
 # To run it by hand, dispatch it from the tag ref, not from a branch: the attestation
 # records the ref and commit the run started from.
-#   gh workflow run release.yml --ref v1.0.0-beta.1
-# Keep tags lightweight as above, as for an annotated tag, github.sha is the tag object.
+#   gh workflow run release.yml --ref v1.0.0-beta.2
 #
 # The bundle ships with a SHA256SUMS file and a build-provenance attestation, so
 # self-hosters can confirm the bytes they serve were built by this workflow from
@@ -35,6 +36,9 @@ jobs:
       - name: Check out the tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Full history: the last step fast-forwards `production`, and git rejects
+          # that ("fetch first") unless the current production tip is present locally.
+          fetch-depth: 0
           # Don't leave the token in the checkout: the install and build steps run
           # third-party code and have no business pushing. The last step passes the
           # token explicitly.
@@ -58,7 +62,7 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          # HEAD is the commit the tag points to (the checkout peels annotated tags), unlike github.sha.
+          # HEAD is the tagged commit even for an annotated tag, as the checkout peels it.
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
