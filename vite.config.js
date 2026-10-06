@@ -6,7 +6,7 @@
 
 import { defineConfig } from 'vite'
 import { readFileSync } from 'fs'
-import { resolve } from 'path'
+import { basename, resolve } from 'path'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -84,6 +84,28 @@ const licenseNotice = () => {
   };
 };
 
+// Build only. Inject preload hints for fonts to prevent font flash.
+const FIRST_PAINT_WEIGHTS = { index: [400, 600, 700], auth: [400, 700], sign: [400, 700], attest: [400, 700] };
+
+const preloadFonts = () => ({
+  name: 'preload-fonts',
+  apply: 'build',
+  transformIndexHtml: {
+    order: 'post',
+    handler(_html, { path, bundle }) {
+      const weights = FIRST_PAINT_WEIGHTS[basename(path, '.html')] ?? [];
+      return Object.keys(bundle)
+        .filter((file) => weights.some((weight) => file.match(`/inter-latin-${weight}-normal-[^/]+\\.woff2$`)))
+        .sort()
+        .map((file) => ({
+          tag: 'link',
+          attrs: { rel: 'preload', as: 'font', type: 'font/woff2', crossorigin: true, href: `/${file}` },
+          injectTo: 'head'
+        }));
+    }
+  }
+});
+
 // https://vite.dev/config/
 export default defineConfig({
   // HTML entries live in src/, so src/ is the Vite root. This keeps each page's
@@ -96,7 +118,7 @@ export default defineConfig({
   publicDir: resolve(__dirname, 'public'),
   envDir: __dirname,
   define: { __APP_VERSION__: JSON.stringify(version) },
-  plugins: [vue(), tailwindcss(), devCspAllowHmr(), licenseNotice()],
+  plugins: [vue(), tailwindcss(), devCspAllowHmr(), licenseNotice(), preloadFonts()],
   build: {
     outDir: resolve(__dirname, 'dist'),
     emptyOutDir: true,
