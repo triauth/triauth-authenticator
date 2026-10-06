@@ -4,6 +4,11 @@ name: release
 # Trigger by pushing a version tag, e.g.:
 #   git tag v1.0.0-beta.1 && git push origin v1.0.0-beta.1
 #
+# To run it by hand, dispatch it from the tag ref, not from a branch: the attestation
+# records the ref and commit the run started from.
+#   gh workflow run release.yml --ref v1.0.0-beta.1
+# Keep tags lightweight as above, as for an annotated tag, github.sha is the tag object.
+#
 # The bundle ships with a SHA256SUMS file and a build-provenance attestation, so
 # self-hosters can confirm the bytes they serve were built by this workflow from
 # this source (see the "Self-hosting" section of the README).
@@ -17,10 +22,6 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Existing tag to build and release (e.g. v1.0.0-beta.1)'
-        required: true
 
 permissions:
   contents: write      # create the release, upload assets, push `production`
@@ -34,7 +35,6 @@ jobs:
       - name: Check out the tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
           # Don't leave the token in the checkout: the install and build steps run
           # third-party code and have no business pushing. The last step passes the
           # token explicitly.
@@ -46,18 +46,29 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Resolve version
+      - name: Resolve version and commit
         id: ver
         env:
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
         run: |
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::Run this workflow from a tag ref, not from a branch."
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          # HEAD is the commit the tag points to (the checkout peels annotated tags), unlike github.sha.
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
       - name: Build
+        env:
+          # The footer links to this exact source tree (see vite.config.js).
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          SOURCE_COMMIT: ${{ steps.ver.outputs.commit }}
         run: npm run build
 
       - name: Package the static bundle (reproducible tarball)

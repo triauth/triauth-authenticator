@@ -27,6 +27,14 @@ const devCspAllowHmr = () => ({
 
 const { version } = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8'));
 
+// Where this build came from, for the footer's source link: `<repo>/tree/<commit>`
+const sourceRepository = (process.env.SOURCE_REPOSITORY_URL ?? '').trim().replace(/\/+$/, '');
+const sourceCommit = [process.env.SOURCE_COMMIT, process.env.WORKERS_CI_COMMIT_SHA]
+  .find((sha) => /^[0-9a-f]{40}$/.test(sha ?? '')) ?? '';
+const sourceUrl = /^https:\/\/\S+$/.test(sourceRepository)
+  ? (sourceCommit ? `${sourceRepository}/tree/${sourceCommit}` : sourceRepository)
+  : '';
+
 const licenseNotice = () => {
   const banner = `/*! triauth-authenticator v${version} | Copyright (c) 2026 The Triauth Authors (https://www.triauth.org/) `
     + `| Licensed under the Elastic License 2.0; see LICENSE.txt for the full text | https://github.com/triauth/triauth-authenticator | SPDX-License-Identifier: Elastic-2.0 */`;
@@ -117,7 +125,7 @@ export default defineConfig({
   root: resolve(__dirname, 'src'),
   publicDir: resolve(__dirname, 'public'),
   envDir: __dirname,
-  define: { __APP_VERSION__: JSON.stringify(version) },
+  define: { __APP_VERSION__: JSON.stringify(version), __APP_SOURCE_URL__: JSON.stringify(sourceUrl) },
   plugins: [vue(), tailwindcss(), devCspAllowHmr(), licenseNotice(), preloadFonts()],
   build: {
     outDir: resolve(__dirname, 'dist'),
