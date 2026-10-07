@@ -25,7 +25,7 @@ let baseUrl = null;
 let identity = null;
 let website = null;
 
-let callbackMethod = 'POST';
+let callbackMethod = 'GET';
 let callbackUrl = null;
 
 const errorMessageRef = ref('');

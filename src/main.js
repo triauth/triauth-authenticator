@@ -83,9 +83,6 @@ app.component('Tag', Tag);
 import Avatar from 'primevue/avatar';
 app.component('Avatar', Avatar);
 
-import ToggleSwitch from 'primevue/toggleswitch';
-app.component('ToggleSwitch', ToggleSwitch);
-
 import Toolbar from 'primevue/toolbar';
 app.component('Toolbar', Toolbar);
 

@@ -66,6 +66,11 @@ export const Helpers = {
     }
     const ext = challenge.data.ext || {};
 
+    // A callbackMethod this authenticator does not know is the website's mistake (no method means GET, see sendResponse)
+    if (ext.callbackMethod !== undefined && !['GET', 'POST', 'HASH'].includes(ext.callbackMethod)) {
+      throw new AppError('This is a problem with the website: its request asks for an unsupported callbackMethod. Please let the website know.', {callbackMethod: ext.callbackMethod});
+    }
+
     // Extract the request authentication code (HMAC) from the `token` parameter
     const tokenParam = params.get('token');
     let hmac = null;
@@ -97,24 +102,11 @@ export const Helpers = {
     };
   },
 
+  // GET is the default when the website names no method (parseRequest refuses unknown ones)
   sendResponse: (method, url, responseString) => {
     url = new URL(url);
 
-    if (method === 'GET') {
-      url.searchParams.set('response', responseString);
-
-      window.location.replace(url);
-
-    } else if (method === 'HASH') {
-      const hash = url.hash.slice(1); // drop leading '#'
-      const [prefix, query = ''] = hash.split('?');
-      const params = new URLSearchParams(query);
-      params.set('response', responseString);
-      url.hash = prefix + '?' + params.toString();
-
-      window.location.replace(url);
-
-    } else {
+    if (method === 'POST') {
       const form = document.createElement('form');
       form.method = 'POST';
       form.action = url;
@@ -128,6 +120,20 @@ export const Helpers = {
       document.body.appendChild(form);
       form.submit();
       setTimeout(() => form.remove(), 250);
+
+    } else if (method === 'HASH') {
+      const hash = url.hash.slice(1); // drop leading '#'
+      const [prefix, query = ''] = hash.split('?');
+      const params = new URLSearchParams(query);
+      params.set('response', responseString);
+      url.hash = prefix + '?' + params.toString();
+
+      window.location.replace(url);
+
+    } else {
+      url.searchParams.set('response', responseString);
+
+      window.location.replace(url);
     }
   },
 

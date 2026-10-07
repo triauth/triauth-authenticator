@@ -128,11 +128,7 @@ function websiteIconSrc(website) {
       <template #end>
         <div class="flex items-center gap-2">
           <div class="my-2 flex items-center mr-4">
-            <Avatar :image="identityRef.privateProfile.avatarImage" :label="identityRef.privateProfile.avatarImage ? null : identityRef.privateProfile.initials || '&nbsp;'" size="large" shape="circle" :title="identityRef.privateProfile.initials" class="mr-4" v-if="identityRef.privateProfile.initials || identityRef.privateProfile.avatarImage"/>
-            <div>
-              <div class="text-left">{{identityRef.privateProfile.name || identityRef.identifier }}</div>
-              <div class="text-sm text-gray-500" v-if="identityRef.privateProfile.name">{{identityRef.identifier || '&nbsp;'}}</div>
-            </div>
+            <div class="text-left">{{ identityRef.identifier }}</div>
             <div class="ml-4 size-6 cursor-pointer" @click.prevent="showContextMenu"><MoreVertIcon/></div>
           </div>
         </div>

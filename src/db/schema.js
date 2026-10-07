@@ -5,7 +5,7 @@
  */
 
 export const SCHEMA = {
-  VERSION: 6,
+  VERSION: 7,
 
   'identities': {
     'id': {type: 'number', optional: true},
@@ -20,9 +20,6 @@ export const SCHEMA = {
 
     'signers': {type: 'object', instance: Array},
     'signers.**': {optional: true},
-
-    'privateProfile': {type: 'object', optional: true},
-    'privateProfile.**': {optional: true},
 
     'publicProfile': {type: 'object', optional: true},
     'publicProfile.**': {optional: true},
@@ -41,9 +38,6 @@ export const SCHEMA = {
 
     'identityId': {type: 'number'},
     'baseUrl': {type: 'string'},
-
-    'permissions': {type: 'object'},
-    'permissions.**': {optional: true},
 
     // The site's self-description, as accepted by Helpers.sanitizeManifest (PROTOCOL.md §14.1)
     'manifest': {type: 'object', optional: true},
@@ -116,5 +110,26 @@ export const INDEXES = {
 // its previous version with data intact - a failed migration means the app cannot open
 // until the code is fixed, never data loss.
 export const MIGRATIONS = {
+
+  // The private profile is no longer supported: drop it from the identities, and drop the websites' permissions,
+  // which only held the grants to read it
+  7: function ({transaction}, done) {
+    const strip = function (storeName, key, next) {
+      const request = transaction.objectStore(storeName).openCursor();
+      request.onsuccess = function () {
+        const cursor = request.result;
+        if (!cursor) return next();
+
+        const value = cursor.value;
+        if (key in value) {
+          delete value[key];
+          cursor.update(value);
+        }
+        cursor.continue();
+      };
+    };
+
+    strip('identities', 'privateProfile', () => strip('websites', 'permissions', done));
+  },
 
 }

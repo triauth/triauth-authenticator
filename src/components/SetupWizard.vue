@@ -300,33 +300,6 @@
       </div>
     </div>
 
-    <div v-if="step === 'privateProfile'">
-      <div class="flex flex-col gap-3">
-        <h2 class="text-xl font-bold text-left">Set up your private profile <span class="font-normal text-gray-500">(optional)</span></h2>
-
-        <Message size="small" severity="secondary" variant="simple" class="text-left mb-8">
-          Your private profile will be stored on this device.
-          Websites that you log into may ask for a permission to read your private profile,
-          and you can decide on a case-by-case basis if you want to share it with them.
-        </Message>
-
-        <div class="_preview mb-2 text-center">
-          <Avatar :label="privateProfile.initials || null" class="mr-2" size="large" shape="circle" :title="privateProfile.initials">
-            <template #icon><PersonIcon class="_person text-gray-500" aria-hidden="true"/></template>
-          </Avatar>
-          <div class="m-4 mt-2 mb-0 mr-6">{{privateProfile.name || '&nbsp;'}}</div>
-          <div class="m-4 mt-0 mr-6 text-sm text-gray-500">{{privateProfile.email || '&nbsp;'}}</div>
-        </div>
-
-        <InputText v-model="privateProfile.initials" :invalid="privateProfileErrors.initials" placeholder="Your initials" maxlength="2" @keydown.enter.prevent="submitField"/>
-        <InputText v-model="privateProfile.name" :invalid="privateProfileErrors.name" placeholder="Name" maxlength="100" @keydown.enter.prevent="submitField"/>
-        <InputText v-model="privateProfile.email" :invalid="privateProfileErrors.email" placeholder="Email address" maxlength="100" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" @input="privateProfile.email = privateProfile.email.toLowerCase()" @keydown.enter.prevent="submitField"/>
-
-        <Button @click="next" :disabled="privateProfileErrors.any" class="mt-10" autofocus>{{ (privateProfile.initials || privateProfile.name || privateProfile.email) ? 'Next' : 'Skip' }}</Button>
-        <Button @click="prev" variant="text" size="small">&laquo; go back</Button>
-      </div>
-    </div>
-
     <div v-if="step === 'dns'">
       <div class="flex flex-col gap-3">
         <h2 class="text-xl font-bold text-left">Almost there</h2>
@@ -459,7 +432,7 @@ import WebauthnSigner from "../signers/webauthn.js";
 
 import {clearBannerDismissal, isFirefox, isSafari, isIos} from "../lib/pwa.js";
 
-const STEPS = ['identifier', 'lookupCode', 'device', 'factors', 'publicProfile', 'privateProfile', 'dns'];
+const STEPS = ['identifier', 'lookupCode', 'device', 'factors', 'publicProfile', 'dns'];
 const step = ref(STEPS[0]);
 
 const cancellable = ref(false);
@@ -838,22 +811,6 @@ watch(publicProfile, () => {
   publicProfileError.value = nameError || initialsError;
 })
 
-
-////////////
-// Step - private profile
-
-const privateProfile = reactive({initials:'', name:'', email:''});
-const privateProfileErrors = ref({});
-
-watch(privateProfile, () => {
-  privateProfileErrors.value = {
-    initials: !!(privateProfile.initials && (!Triauth.Helpers.isNormalString(privateProfile.initials) || privateProfile.initials.match(/['"=<>&]/) || privateProfile.initials.length > 2)),
-    name: !!(privateProfile.name && (!Triauth.Helpers.isNormalString(privateProfile.name) || privateProfile.name.match(/["=<>&]/) || privateProfile.name.length > 25)),
-    email: !!(privateProfile.email && (!Triauth.Helpers.isNormalString(privateProfile.email) || !privateProfile.email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/) || privateProfile.email.length > 250)),
-  }
-  privateProfileErrors.value.any = Object.values(privateProfileErrors.value).some((e) => e);
-})
-
 ////////////
 // Step - DNS setup
 
@@ -1033,7 +990,6 @@ const finishSetup = async () => {
     identifier: identifier.value,
     signers: signers.value.map((signer) => signer.serialize()),
     publicProfile: toRaw(publicProfile),
-    privateProfile: toRaw(privateProfile),
     createdAt: Date.now()
   }
 
@@ -1092,7 +1048,6 @@ const addTestIdentity = async (entry) => {
     identifier: entry.identifier,
     ...(entry.lookupCode ? {lookupCode: entry.lookupCode} : {}),
     publicProfile: entry.publicProfile || {},
-    privateProfile: entry.privateProfile || {},
     signers,
     createdAt: Date.now()
   });
@@ -1125,7 +1080,7 @@ const addTestIdentity = async (entry) => {
 ._status > :first-child { position:absolute; left:0; top:0; }
 ._status > ._info:first-child { top:calc((1lh - 1.125em) / 2); }   /* centred on the first line of text */
 
-/* The empty avatar on the profile steps shows a generic person until initials are typed */
+/* The empty avatar on the profile step shows a generic person until initials are typed */
 ._person { fill:currentColor; }
 
 /* A button that leaves the app: the "open in new" icon follows the label, in the button's own colour */
@@ -1133,7 +1088,7 @@ const addTestIdentity = async (entry) => {
 
 /* On phones the text column inside the hint box is half the screen, so the box runs into the card's padding, only the
    lead line beside the info sign (._lead) keeps its gutter, the record table stacks each label above its value, and
-   the profile steps drop the avatar preview so the fields stay in view above the keyboard */
+   the profile step drops the avatar preview so the fields stay in view above the keyboard */
 @media (max-width: 480px) {
   ._preview { display:none; }
   ._dns-hint { margin-left:-1.5rem; margin-right:-1.5rem; }

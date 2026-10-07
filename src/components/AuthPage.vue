@@ -22,12 +22,10 @@ let baseUrl = null;
 let identity = null;
 let website = null;
 
-let callbackMethod = 'POST';
+let callbackMethod = 'GET';
 let callbackUrl = null;
 
 const requestedExt = {};
-
-const permissionSwitchesRef = ref({});
 
 // Every token a website may request; each requested one is minted on approval (see confirm())
 const TOKEN_TYPES = ['pingToken', 'signToken', 'stampToken', 'attestToken'];
@@ -37,13 +35,6 @@ const SILENT_GRANT_DESCRIPTIONS = {
   pingToken: 'verify your session in the background while you use it',
   stampToken: 'prove to other websites that you are signed in'
 };
-
-// The private profile fields that a grant shares: the non-empty ones. The consent screen lists
-// exactly these keys and confirm() sends exactly this object.
-const sharedPrivateProfile = () =>
-  Object.fromEntries(Object.entries(identity?.privateProfile || {}).filter(([, v]) => !!v));
-
-const privateProfileFieldsRef = computed(() => Object.keys(sharedPrivateProfile()).join(', '));
 
 // The silent grants the website requested, displayed as a list on the consent screen
 const grantsRef = computed(() =>
@@ -85,27 +76,19 @@ async function setup() {
       website = {
         identityId: identity.id,
         baseUrl: baseUrl.href,
-        permissions: {},
         createdAt: Date.now()
       };
     }
 
     // Extract the ext from challenge, filter through whitelist, normalize, and store in requestedExt
     for (const [k,v] of Object.entries(ext)) {
-      if (['privateProfile'].indexOf(k) >= 0) {
-        requestedExt[k] = v === true;
-
-        if (requestedExt[k]) {
-          permissionSwitchesRef.value[k] = Object.keys(website.permissions).includes(k) ? !!website.permissions[k] : false;
-        }
-
-      } else if (TOKEN_TYPES.indexOf(k) >= 0) {
+      if (TOKEN_TYPES.indexOf(k) >= 0) {
         requestedExt[k] = !!v;
 
       } else if (k === 'manifest') {
         requestedExt[k] = Helpers.sanitizeManifest(v, baseUrl);
 
-      } else if (k === 'callbackMethod' && Triauth.Helpers.isNormalString(v)) {
+      } else if (k === 'callbackMethod') {
         callbackMethod = v;
       }
     }
@@ -163,11 +146,6 @@ async function confirm(){
   busyRef.value = true;
 
   try {
-    // Remember user-selection of permissions in the website model
-    for (const [k,v] of Object.entries(permissionSwitchesRef.value)) {
-      website.permissions[k] = !!v;
-    }
-
     website.lastLoginAt = Date.now();
 
     // The tile icon is captured under this approval, and only when there is none yet or the site now
@@ -189,13 +167,8 @@ async function confirm(){
 
     const signedMetadata = {};
 
-    if (requestedExt.privateProfile && permissionSwitchesRef.value.privateProfile) {
-      signedMetadata.ext ||= {};
-      signedMetadata.ext.privateProfile = sharedPrivateProfile();
-    }
-
     for (const type of TOKEN_TYPES) {
-      if (permissionSwitchesRef.value[type] || !!requestedExt[type]) {
+      if (requestedExt[type]) {
         const value = ':' + Triauth.Helpers.randomString(24);
 
         signedMetadata.ext ||= {};
@@ -281,17 +254,6 @@ async function deny() {
         <ul class="list-disc ml-5 mt-1">
           <li v-for="grant of grantsRef" :key="grant.key">{{ grant.text }}</li>
         </ul>
-      </div>
-
-      <div class="mx-7 pt-4 p-6 text-left bg-gray-50 rounded-lg" v-if="requestedExt.privateProfile">
-        <div class="font-bold py-2 flex">
-          <label class="grow">Private profile</label>
-          <div><ToggleSwitch v-model="permissionSwitchesRef.privateProfile"/></div>
-        </div>
-        <div class="text-sm py-2 text-slate-800">
-          Allow this website to read your private profile.<br/>
-          <span class="text-gray-500">{{ privateProfileFieldsRef }}</span>
-        </div>
       </div>
 
       <div class="p-2 bg-yellow-200 inline-block rounded text-gray-800 text-sm" v-if="!website.id">
