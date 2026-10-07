@@ -39,7 +39,7 @@
               <div class="_dns-hint mt-3 p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed">
                 <div class="_status">
                   <InfoIcon class="_info" aria-hidden="true"/>
-                  <p>Check spelling. There seems to be no <strong>{{ identifierDomain }}</strong> domain.</p>
+                  <p class="_lead">Check spelling. There seems to be no <strong>{{ identifierDomain }}</strong> domain.</p>
                   <p class="mt-3">If you like the name, you can try to buy the domain and claim your unique identifier in just a few minutes.</p>
                   <p class="mt-3"><Button as="a" :href="'https://www.cloudflare.com/domains/search?q=' + encodeURIComponent(identifierDomain)" target="_blank" rel="noopener noreferrer" variant="outlined" size="small" class="_ext">Check availability with Cloudflare Registrar<OpenInNewIcon aria-hidden="true"/></Button></p>
                   <p class="mt-3">Besides triauth, you can use the same domain for personalized email, websites, and more.</p>
@@ -1132,7 +1132,7 @@ const addTestIdentity = async (entry) => {
 ._ext svg { width:1rem; height:1rem; fill:currentColor; }
 
 /* On phones the text column inside the hint box is half the screen, so the box runs into the card's padding, only the
-   question and the switch (._lead) keep the info sign's gutter, the record table stacks each label above its value, and
+   lead line beside the info sign (._lead) keeps its gutter, the record table stacks each label above its value, and
    the profile steps drop the avatar preview so the fields stay in view above the keyboard */
 @media (max-width: 480px) {
   ._preview { display:none; }

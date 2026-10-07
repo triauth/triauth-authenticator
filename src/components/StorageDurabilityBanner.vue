@@ -58,7 +58,7 @@ async function install() {
             <template v-else-if="android">
               This browser may remove your sign-in keys to free space.
               <template v-if="installAvailableRef || installAccepted">Installing keeps them stored.</template>
-              <template v-else>Add whis website to your home screen from the browser menu to keep them stored.</template>
+              <template v-else>Add this website to your home screen from the browser menu to keep them stored.</template>
             </template>
             <template v-else>
               This browser may remove your sign-in keys to free space.
