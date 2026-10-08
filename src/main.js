@@ -61,7 +61,10 @@ if (!app) {
 
 app.use(PrimeVue, {
   theme: {
-    preset: Blue
+    preset: Blue,
+    options: {
+      darkModeSelector: false
+    }
   }
 })
 
