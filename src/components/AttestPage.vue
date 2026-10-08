@@ -79,7 +79,7 @@ async function verifyResponse(params) {
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
-    errorMessageRef.value = err instanceof AppError ? err.message : 'Internal error has occurred';
+    errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';
 
   }
 }
@@ -100,14 +100,14 @@ async function verifyRequest() {
     identity = await db.find('identities', {identifier});
 
     if (!identity) {
-      throw new AppError(`A website tried to request an attestation for ${challenge.identity.identifier} but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
+      throw new AppError(`A website tried to request an attestation for ${challenge.identity.identifier}, but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
     }
 
     // Find the token that should be used with this request
     const token = await db.find('tokens', {type:'attestToken', identityId:identity.id, baseUrl:baseUrl.href });
 
     if (!token || Helpers.tokenExpired(token)) {
-      throw new AppError('Referring website used an invalid or expired token', {identityId:identity.id, baseUrl:baseUrl.href});
+      throw new AppError('The referring website used an invalid or expired token', {identityId:identity.id, baseUrl:baseUrl.href});
     }
 
     // Do the security checks for hmac token
@@ -118,7 +118,7 @@ async function verifyRequest() {
     // Double-check that the website entry in DB exists for the given token, and that the website has permission
     website = await db.find('websites', {id: token.websiteId, identityId:identity.id});
     if (!website) {
-      throw new AppError('Referring website is not recognized', {tokenId:token.id, websiteId:token.websiteId, identityId:identity.id});
+      throw new AppError('The referring website is not recognized', {tokenId:token.id, websiteId:token.websiteId, identityId:identity.id});
     }
 
     // Validate the attestations, as embedded in challenge.data.attest
@@ -147,7 +147,7 @@ async function verifyRequest() {
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
-    errorMessageRef.value = err instanceof AppError ? err.message : 'Internal error has occurred';
+    errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';
 
   }
 }
@@ -187,7 +187,7 @@ async function performVerification(attestId) {
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
-    errorMessageRef.value = err instanceof AppError ? err.message : 'Internal error has occurred';
+    errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';
 
   }
 }
@@ -285,7 +285,7 @@ async function confirm() {
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
-    errorMessageRef.value = err instanceof AppError ? err.message : 'Internal error has occurred';
+    errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';
     busyRef.value = false;
   }
 }
@@ -348,7 +348,7 @@ async function confirm() {
 
 
           <div class="text-gray-500 text-sm mx-4 text-justify p-4">
-            The labels and list of third-party verification providers above was provided by the website above.
+            The labels and the list of third-party verification providers above were provided by the website.
             After clicking the verify button you will be directed to the selected verification provider's website on which you can finish the verification.
             We have no control over, and disclaim any responsibility for, the content, privacy policies, or practices of any third-party verification providers.
           </div>

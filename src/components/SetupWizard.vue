@@ -134,7 +134,7 @@
               <span>✕</span>Please use <a :href="whoisResponse.authenticationEndpoint.url" rel="noreferrer" class="wrap-anywhere">{{whoisResponse.authenticationEndpoint.url}}</a>
             </div>
             <div class="_status" v-else-if="whoisResponse.modeMismatch">
-              <span>✕</span>This domain is configured with unsupported mode
+              <span>✕</span>This domain is configured with an unsupported mode
             </div>
             <div v-else-if="isPrivate">
               <div class="_status"><span>✓</span>Domain is configured for triauth</div>
@@ -199,7 +199,7 @@
           <pre class="_code _code-lookup" id="generatedLookupCode">{{ Helpers.formatLookupCode(newLookupCode) }}</pre>
           <Message size="small" :severity="codeWhoisResponse?.error ? 'error' : 'secondary'" variant="simple" class="text-left">
             <div class="_status" v-if="codeWhoisResponse?.error">
-              <span>✕</span>An error has occurred - {{ codeWhoisResponse.error.message }} <a href @click.prevent="lookupWithCode(lookupCode)">try again</a>
+              <span>✕</span>An error has occurred - {{ codeWhoisResponse.error.message }}. <a href @click.prevent="lookupWithCode(lookupCode)">Try again</a>.
             </div>
             <div class="_status" v-else-if="codeWhoisResponse && !codeWhoisResponse.identityDomain">
               <span>✕</span>No identity domain could be derived for {{ identifierDomain }} - check the domain's configuration
@@ -216,7 +216,7 @@
           <Message size="small" :severity="(codeWhoisResponse?.error || codeWhoisResponse?.status === 0) ? 'error' : 'secondary'" variant="simple" class="text-left">
             <div v-if="!lookupCode">Enter the 16-character code you saved when you first set up this identifier.</div>
             <div class="_status" v-else-if="!codeWhoisResponse"><span>-</span>please wait ...</div>
-            <div class="_status" v-else-if="codeWhoisResponse.error"><span>✕</span>An error has occurred - {{ codeWhoisResponse.error.message }} <a href @click.prevent="lookupWithCode(lookupCode)">try again</a></div>
+            <div class="_status" v-else-if="codeWhoisResponse.error"><span>✕</span>An error has occurred - {{ codeWhoisResponse.error.message }}. <a href @click.prevent="lookupWithCode(lookupCode)">Try again</a>.</div>
             <div class="_status" v-else-if="codeWhoisResponse.status === 1"><span>✓</span>Lookup code accepted - you have {{ codeWhoisResponse.devices.length }} device(s) already configured</div>
             <div class="_status" v-else><span>✕</span>No identity records were found for this code. Check it for typos, or choose the first option if you are setting up this identifier for the first time.</div>
           </Message>
@@ -592,7 +592,7 @@ const askMessage = computed(() => [
   // 'triauth is a decentralized, phishing-resistant single sign-on protocol for passwordless sign-in. Members sign in with an identifier at our domain, their private keys never leave their devices, and the domain itself is the source of truth for who may sign in.', '',
   'For our organization that means:',
   '- Improved security with phishing-resistant, device-based sign-in for all members.',
-  '- Ability to grant, review and revoke access for every member and device from DNS panel we already have.',
+  '- Ability to grant, review and revoke access for every member and device from the DNS panel we already have.',
   '- Nothing extra to run, maintain, or pay for.', '',
   'The rollout guide covers the setup: https://www.triauth.org/organizations/', '',
   'Thanks!'

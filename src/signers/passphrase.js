@@ -45,7 +45,7 @@ class PassphraseSigner extends BaseSigner {
   interactive = true;
 
   t = {
-    title: 'Passphrase protected cryptographic key'
+    title: 'Passphrase-protected cryptographic key'
   }
 
   async setup() {
@@ -122,7 +122,7 @@ class PassphraseSigner extends BaseSigner {
         );
       } catch (err) {
         if (err.name !== 'OperationError') throw err;
-        error = 'Wrong passphrase, try again';
+        error = 'Wrong passphrase. Try again.';
       }
     }
   }

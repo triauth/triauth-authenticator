@@ -88,14 +88,14 @@ async function setup() {
     identity = await db.find('identities', {identifier});
 
     if (!identity) {
-      throw new AppError(`A website tried to request a signature from ${challenge.identity.identifier} but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
+      throw new AppError(`A website tried to request a signature from ${challenge.identity.identifier}, but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
     }
 
     // Find the token that should be used with this request
     const token = await db.find('tokens', {type:'signToken', identityId:identity.id, baseUrl:baseUrl.href });
 
     if (!token || Helpers.tokenExpired(token)) {
-      throw new AppError('Referring website is not allowed to request signatures', {identityId:identity.id, baseUrl:baseUrl.href});
+      throw new AppError('The referring website is not allowed to request signatures', {identityId:identity.id, baseUrl:baseUrl.href});
     }
 
     // Do the security checks for hmac token
@@ -106,7 +106,7 @@ async function setup() {
     // Double-check that the website entry in DB exists for the given token, and that the website has permission
     website = await db.find('websites', {id: token.websiteId, identityId:identity.id});
     if (!website) {
-      throw new AppError('Referring website is not allowed to request signatures', {tokenId:token.id, websiteId:token.websiteId, identityId:identity.id});
+      throw new AppError('The referring website is not allowed to request signatures', {tokenId:token.id, websiteId:token.websiteId, identityId:identity.id});
     }
 
     // Validate the message to be signed, as embedded in challenge.data.msg
@@ -140,7 +140,7 @@ async function setup() {
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
-    errorMessageRef.value = err instanceof AppError ? err.message : 'Internal error has occurred';
+    errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';
 
   }
 }
@@ -203,7 +203,7 @@ async function confirm() {
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
-    errorMessageRef.value = err instanceof AppError ? err.message : 'Internal error has occurred';
+    errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';
     busyRef.value = false;
   }
 }

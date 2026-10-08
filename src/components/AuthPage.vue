@@ -65,7 +65,7 @@ async function setup() {
     identity = await db.find('identities', {identifier});
 
     if (!identity) {
-      throw new AppError(`A website tried to authenticate ${identifier} but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
+      throw new AppError(`A website tried to authenticate ${identifier}, but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
     }
 
     ////
@@ -112,7 +112,7 @@ async function setup() {
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
-    errorMessageRef.value = err instanceof AppError ? err.message : 'Internal error has occurred';
+    errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';
 
   }
 }
@@ -194,7 +194,7 @@ async function confirm(){
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
-    errorMessageRef.value = err instanceof AppError ? err.message : 'Internal error has occurred';
+    errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';
     busyRef.value = false;
   }
 }

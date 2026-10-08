@@ -52,7 +52,7 @@ async function install() {
 
           <div class="text-sm text-gray-600 leading-relaxed">
             <template v-if="activityRequired">
-              Browsers on iPhone, iPad, and Safari on Mac, may clear sign-in keys after a week without use.
+              Safari on Mac and all browsers on iPhone and iPad may clear sign-in keys after a week without use.
               Use triauth regularly or keep another device registered.
             </template>
             <template v-else-if="android">
