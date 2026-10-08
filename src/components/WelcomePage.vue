@@ -46,8 +46,8 @@ const getStarted = () => {
       </div>
 
       <div class="text-center">
-        <h2 class="font-bold text-2xl mb-5 ta-rise" style="--d:1.4s">Meet your new sign-in button</h2>
-        <p class="font-medium ta-rise" style="--d:1.5s">Link your triauth identifier to this device and leave passwords behind.</p>
+        <h2 class="font-bold text-2xl mb-5 ta-rise" style="--d:1.4s">Meet your new way to sign in</h2>
+        <p class="font-medium ta-rise" style="--d:1.5s">Set up your triauth identifier on this device and leave passwords behind.</p>
       </div>
 
       <div class="ta-rise" style="--d:1.6s">

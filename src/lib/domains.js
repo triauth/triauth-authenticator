@@ -36,6 +36,55 @@ export const isRegistrable = (domain) => {
   return !parent.includes('.') || SECOND_LEVEL_SUFFIXES.includes(parent);
 };
 
+// Domains of the largest consumer mail providers, worldwide and by region
+export const MAIL_PROVIDER_DOMAINS = [
+  // Worldwide
+  'gmail.com', 'googlemail.com',
+  'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+  'icloud.com', 'me.com', 'mac.com',
+  'yahoo.com', 'ymail.com', 'aol.com', 'mail.com',
+  'proton.me', 'protonmail.com', 'protonmail.ch', 'pm.me', 'tuta.io', 'tutanota.com',
+  // United States
+  'comcast.net', 'att.net', 'sbcglobal.net', 'verizon.net', 'bellsouth.net', 'cox.net', 'charter.net',
+  // United Kingdom, Ireland
+  'btinternet.com', 'sky.com', 'virginmedia.com', 'talktalk.net', 'ntlworld.com',
+  'hotmail.co.uk', 'live.co.uk', 'yahoo.co.uk',
+  'eircom.net',
+  // France, Belgium, Netherlands
+  'orange.fr', 'wanadoo.fr', 'free.fr', 'sfr.fr', 'laposte.net', 'hotmail.fr', 'live.fr', 'outlook.fr', 'yahoo.fr', 'gmx.fr',
+  'telenet.be', 'skynet.be', 'hotmail.be', 'live.be',
+  'ziggo.nl', 'kpnmail.nl', 'planet.nl', 'home.nl', 'hotmail.nl', 'live.nl',
+  // Germany, Austria, Switzerland
+  'gmx.de', 'gmx.net', 'gmx.com', 'web.de', 't-online.de', 'freenet.de', 'hotmail.de', 'live.de', 'outlook.de', 'yahoo.de',
+  'gmx.at', 'aon.at',
+  'bluewin.ch', 'gmx.ch',
+  // Southern Europe
+  'libero.it', 'virgilio.it', 'alice.it', 'tiscali.it', 'hotmail.it', 'live.it', 'outlook.it', 'yahoo.it',
+  'hotmail.es', 'outlook.es', 'yahoo.es',
+  'sapo.pt',
+  'otenet.gr', 'yahoo.gr',
+  // Nordic countries
+  'telia.com', 'hotmail.se', 'live.se',
+  'online.no', 'hotmail.no', 'live.no',
+  'hotmail.dk', 'live.dk',
+  // Central and Eastern Europe
+  'wp.pl', 'o2.pl', 'interia.pl', 'onet.pl',
+  'seznam.cz', 'email.cz', 'centrum.cz',
+  'azet.sk', 'centrum.sk', 'zoznam.sk',
+  'freemail.hu', 'citromail.hu',
+  'siol.net',
+  'abv.bg', 'mail.bg',
+  'hot.ee', 'inbox.lv', 'inbox.lt',
+  'ukr.net', 'i.ua',
+  'mail.ru', 'yandex.ru',
+  // Asia
+  'qq.com', 'foxmail.com', '163.com', '126.com', 'yeah.net', 'sina.com', 'sohu.com', '139.com',
+  'yahoo.co.jp', 'docomo.ne.jp', 'ezweb.ne.jp', 'au.com', 'softbank.ne.jp', 'i.softbank.jp', 'hotmail.co.jp',
+  'naver.com', 'daum.net', 'hanmail.net', 'nate.com', 'kakao.com',
+  'rediffmail.com', 'yahoo.co.in', 'yahoo.in',
+  'yahoo.com.tw', 'yahoo.com.hk', 'yahoo.co.id', 'yahoo.com.ph'
+];
+
 // The identifier domains this instance serves.
 // Operator setting injected at build time:
 //

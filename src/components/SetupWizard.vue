@@ -21,7 +21,7 @@
         <InputText id="identifier" v-model="identifier" @input="validateIdentifier" @keydown.enter.prevent="submitField" @keydown.esc.prevent="close" aria-describedby="identifier-help" placeholder="e.g., john@example.com" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus/>
         <Message size="small" severity="secondary" variant="simple" class="text-left min-w-0" :pt="{contentWrapper: {class: 'min-w-0'}, text: {class: 'min-w-0 grow'}}" v-if="!identifierError" id="identifier-help">
           <div v-if="!identifier" style="line-height: 1.75em;">
-            <p>You will use this identifier to sign in to websites through this web browser.</p>
+            <p>Create a new one or use one you already have. It can be your email address. You will use it to sign in to websites without a password.</p>
             <p class="mt-2">New to triauth? <a href="https://www.triauth.org/identity/get-started" target="_blank" rel="noopener noreferrer" class="underline inline-block">See what you need to get started.</a></p>
           </div>
           <div v-else>
@@ -32,6 +32,20 @@
             </div>
             <div class="_status" v-else-if="whoisResponse.error">
               <span>✕</span>An error has occurred - {{whoisResponse.error.message}}
+            </div>
+            <div v-else-if="unsupportedMailProvider">
+              <div class="_status"><span>✕</span>Domain is not configured for triauth</div>
+
+              <div class="_dns-hint mt-3 p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed">
+                <div class="_status">
+                  <InfoIcon class="_info" aria-hidden="true"/>
+                  <p class="_lead"><strong>{{ identifierDomain }}</strong> does not support triauth yet. Your identifier has to be at a domain you own.</p>
+                  <p class="mt-3">If you do not have one, you can buy a domain in a few minutes.</p>
+                  <p class="mt-3"><Button as="a" href="https://www.cloudflare.com/domains/" target="_blank" rel="noopener noreferrer" variant="outlined" size="small" class="_ext">Find a domain with Cloudflare Registrar<OpenInNewIcon aria-hidden="true"/></Button></p>
+                  <p class="mt-3">Besides triauth, you can use the same domain for personalized email, websites, and more.</p>
+                  <p class="mt-3">If your organization has its own domain, you can use your work email address instead.</p>
+                </div>
+              </div>
             </div>
             <div v-else-if="whoisResponse.nxdomain">
               <div class="_status"><span>✕</span>Domain not found</div>
@@ -224,7 +238,7 @@
             <span>✕</span>{{deviceNameError}}
           </div>
           <div v-else-if="!deviceName">
-            <p>How would you like to call this device?</p>
+            <p>What would you like to call this device?</p>
             <p class="mt-2">This name will be publicly visible in your identity records.</p>
           </div>
           <div class="_status" v-else-if="deviceNameExists">
@@ -411,7 +425,7 @@ import {ref, computed, watch, nextTick, shallowRef, reactive, onMounted, onUnmou
 import { useDebounceFn } from '@vueuse/core';
 import { db } from '../db/db.js'
 import { Helpers } from '../lib/helpers.js'
-import { isRegistrable, servesDomain, NOT_SERVED_MESSAGE } from '../lib/domains.js'
+import { isRegistrable, servesDomain, NOT_SERVED_MESSAGE, MAIL_PROVIDER_DOMAINS } from '../lib/domains.js'
 
 import CloseIcon from '../../vendor/material-icons/Close.vue';
 import OpenInNewIcon from '../../vendor/material-icons/OpenInNew.vue';
@@ -547,12 +561,15 @@ const isPrivate = computed(() => whoisResponse.value?.authenticationEndpoint?.op
 const recheck = ref(null);   // "Check again": null | 'pending' | 'unchanged'
 
 const canContinue = computed(() => whoisResponse.value?.status >= 0 && !whoisResponse.value.originMismatch && !whoisResponse.value.modeMismatch);
-const canRecheck = computed(() => !identifierError.value && !!whoisResponse.value && !canContinue.value);
+const canRecheck = computed(() => !identifierError.value && !!whoisResponse.value && !canContinue.value && !unsupportedMailProvider.value);
 
 // Domain part of the identifier (e.g. 'example.com' for 'john@example.com') and the hostname of
 // this authenticator — used to show the DNS setup hint when a domain isn't configured for triauth.
 const identifierDomain = computed(() => identifier.value.split('@')[1] || '');
 const endpointHost = window.location.hostname;
+
+// A consumer mail domain such as gmail.com whose TXT lookup found no triauth record
+const unsupportedMailProvider = computed(() => whoisResponse.value?.status === -1 && !whoisResponse.value.brokenRecord && MAIL_PROVIDER_DOMAINS.includes(identifierDomain.value));
 
 // What goes in the panel's Host / Name field: for the zone itself a recognised panel's own convention ('@' or an empty
 // field), else the full name, which the row turns into a note; below the zone the labels above it, which every panel takes
@@ -576,7 +593,7 @@ const askMessage = computed(() => [
   'For our organization that means:',
   '- Improved security with phishing-resistant, device-based sign-in for all members.',
   '- Ability to grant, review and revoke access for every member and device from DNS panel we already have.',
-  '- Nothing to run, maintain, and nothing to pay per user.', '',
+  '- Nothing extra to run, maintain, or pay for.', '',
   'The rollout guide covers the setup: https://www.triauth.org/organizations/', '',
   'Thanks!'
 ].join('\n'));
