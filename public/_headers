@@ -17,3 +17,7 @@
 # The service worker must never be cached - updates take effect on the next navigation.
 /sw.js
   Cache-Control: no-cache
+
+# The vendored triauth-js keeps a fixed URL, so it is always revalidated - a stale copy must never meet newer app code.
+/vendor/*
+  Cache-Control: no-cache

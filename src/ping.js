@@ -49,7 +49,7 @@ const run = async () => {
 
       const signature = await authenticator.process('ping', baseUrl.href, String(challenge.challengeString));
 
-      Helpers.sendResponse(ext['callbackMethod'], callbackUrl, signature);
+      Helpers.sendResponse(ext['callbackMethod'], callbackUrl, await Helpers.sealResponse(challenge, signature));
 
     } catch (err) {
       if (Helpers.referrerMatchesCallback(callbackUrl)) {

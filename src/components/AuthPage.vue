@@ -189,7 +189,7 @@ async function confirm(){
     const authenticator = new Authenticator(identity, identity.signers);
     const responseData = await authenticator.process('auth', baseUrl.href, challenge.challengeString, signedMetadata);
 
-    Helpers.sendResponse(callbackMethod, callbackUrl, responseData);
+    Helpers.sendResponse(callbackMethod, callbackUrl, await Helpers.sealResponse(challenge, responseData));
 
   } catch (err) {
     Triauth.config.logger.error(err, err.data);

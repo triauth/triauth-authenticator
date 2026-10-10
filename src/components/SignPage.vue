@@ -198,7 +198,7 @@ async function confirm() {
       attachments: attachmentsRef.value.map((a) => ({name: a.name, sha256: a.sha256}))
     });
 
-    Helpers.sendResponse(callbackMethod, callbackUrl, signature);
+    Helpers.sendResponse(callbackMethod, callbackUrl, await Helpers.sealResponse(challenge, signature));
 
   } catch (err) {
     Triauth.config.logger.error(err, err.data);

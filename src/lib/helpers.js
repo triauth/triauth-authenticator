@@ -71,6 +71,11 @@ export const Helpers = {
       throw new AppError('This is a problem with the website: its request asks for an unsupported callbackMethod. Please let the website know.', {callbackMethod: ext.callbackMethod});
     }
 
+    // Every response is sealed to `ek` (see sealResponse). A missing or malformed key is the website's mistake.
+    if (typeof challenge.data.ek !== 'string' || !/^[A-Za-z0-9_-]{87}$/.test(challenge.data.ek)) {
+      throw new AppError('This is a problem with the website: its request has no valid encryption key. Please let the website know.', {ek: challenge.data.ek});
+    }
+
     // Extract the request authentication code (HMAC) from the `token` parameter
     const tokenParam = params.get('token');
     let hmac = null;
@@ -101,6 +106,10 @@ export const Helpers = {
       baseUrl
     };
   },
+
+  // The response is sealed to the challenge's encryption key (`ek`), so it travels as ciphertext and only the website
+  // that holds the challenge can open it. parseRequest has already refused a challenge without a valid `ek`.
+  sealResponse: (challenge, responseString) => Triauth.ResponseCipher.seal(challenge.data.ek, responseString),
 
   // GET is the default when the website names no method (parseRequest refuses unknown ones)
   sendResponse: (method, url, responseString) => {

@@ -280,7 +280,7 @@ async function confirm() {
 
     await cleanupTokens();
 
-    Helpers.sendResponse(callbackMethod, callbackUrl, response);
+    Helpers.sendResponse(callbackMethod, callbackUrl, await Helpers.sealResponse(challenge, response));
 
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
