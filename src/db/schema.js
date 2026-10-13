@@ -5,7 +5,7 @@
  */
 
 export const SCHEMA = {
-  VERSION: 7,
+  VERSION: 8,
 
   'identities': {
     'id': {type: 'number', optional: true},
@@ -57,21 +57,35 @@ export const SCHEMA = {
     'lastLoginAt': {type: 'number', optional: true}
   },
 
-  'tokens': {
-    'id': {type: 'number', optional: true},
+  // Checks that the attest page started, until the provider's response is used
+  'verifications': {
+    // A one-time random value, which the provider sends back in the callback URL with its response
+    'id': {type: 'string'},
 
     'identityId': {type: 'number'},
     'websiteId': {type: 'number'},
 
-    'baseUrl': {type: 'string'},
-    'origin': {type: 'string'},
+    'createdAt': {type: 'number'},
+    'expiresAt': {type: 'number'},
+    'response': {type: 'string', optional: true}
+  },
 
-    'type': {type: 'string'},
-    'value': {type: 'string'},
+  'sessions': {
+    'id': {type: 'number', optional: true},
+
+    'identityId': {type: 'number'},
+    'websiteId': {type: 'number'},
+    'baseUrl': {type: 'string'},
+
+    'sessionKey': {type: 'string'}, // shared secret derived from the most recent authentication request
+    'skid': {type: 'string'}, // SHA-256 of sessionKey
+
+    // The requests that the user allowed to run with no prompt
+    'permissions': {type: 'object'},
+    'permissions.ping': {type: 'boolean'},
+    'permissions.stamp': {type: 'boolean'},
 
     'createdAt': {type: 'number'},
-    'expiresAt': {type: 'number', optional: true},
-    'response': {type: 'string', optional: true},
     'lastUsedAt': {type: 'number', optional: true}
   },
 
@@ -90,9 +104,14 @@ export const INDEXES = {
     {name: 'identityId_baseUrl', keyPath: ['identityId', 'baseUrl']},
   ],
 
-  'tokens': [
+  'verifications': [
     {name: 'identityId', keyPath: 'identityId'},
-    {name: 'type_identityId_baseUrl', keyPath: ['type', 'identityId', 'baseUrl']},
+    {name: 'websiteId', keyPath: 'websiteId'},
+  ],
+
+  'sessions': [
+    {name: 'skid', keyPath: 'skid', options: {unique: true}},
+    {name: 'identityId', keyPath: 'identityId'},
     {name: 'websiteId', keyPath: 'websiteId'},
   ],
 
@@ -130,6 +149,14 @@ export const MIGRATIONS = {
     };
 
     strip('identities', 'privateProfile', () => strip('websites', 'permissions', done));
+  },
+
+  // Drop the deprecated tokens store.
+  8: function ({db}, done) {
+    if (db.objectStoreNames.contains('tokens')) {
+      db.deleteObjectStore('tokens');
+    }
+    done();
   },
 
 }

@@ -27,18 +27,19 @@ let callbackUrl = null;
 
 const requestedExt = {};
 
-// Every token a website may request; each requested one is minted on approval (see confirm())
-const TOKEN_TYPES = ['pingToken', 'signToken', 'stampToken', 'attestToken'];
-
-// The tokens that later sign with no prompt are listed on the consent screen
-const SILENT_GRANT_DESCRIPTIONS = {
-  pingToken: 'verify your session in the background while you use it',
-  stampToken: 'prove to other websites that you are signed in'
+// The permissions a website may ask for, which allow its requests to run with no prompt.
+// Sign and attest requests need no permission, because the user manually approves each of them.
+const PERMISSION_DESCRIPTIONS = {
+  ping: 'verify your session in the background while you use it',
+  stamp: 'prove to other websites that you are signed in'
 };
 
-// The silent grants the website requested, displayed as a list on the consent screen
+// The permissions that the website put in `ext.permissions`, each `true` when it asks for it (see setup())
+const requestedPermissions = {};
+
+// The permissions the website asks for, displayed as a list on the consent screen
 const grantsRef = computed(() =>
-  Object.entries(SILENT_GRANT_DESCRIPTIONS).filter(([k]) => requestedExt[k]).map(([key, text]) => ({key, text}))
+  Object.entries(PERMISSION_DESCRIPTIONS).filter(([k]) => requestedPermissions[k]).map(([key, text]) => ({key, text}))
 );
 
 const errorMessageRef = ref('');
@@ -51,7 +52,8 @@ setup();
 
 async function setup() {
   try {
-    const requestData = Helpers.parseRequest(window.location, 'auth');
+    const challengeString = Helpers.urlFragmentParams(window.location).get('challenge');
+    const requestData = Helpers.parseChallenge(challengeString, 'auth');
     const {identifier, ext} = requestData;
 
     challenge = requestData.challenge;
@@ -80,10 +82,14 @@ async function setup() {
       };
     }
 
-    // Extract the ext from challenge, filter through whitelist, normalize, and store in requestedExt
+    // Extract the ext from challenge, filter through whitelist, normalize, and store in requestedExt, requestedPermissions, and callbackMethod
     for (const [k,v] of Object.entries(ext)) {
-      if (TOKEN_TYPES.indexOf(k) >= 0) {
-        requestedExt[k] = !!v;
+      if (k === 'permissions') {
+        for (const name of Object.keys(PERMISSION_DESCRIPTIONS)) {
+          if (v && typeof v === 'object' && Object.hasOwn(v, name)) {
+            requestedPermissions[name] = v[name] === true;
+          }
+        }
 
       } else if (k === 'manifest') {
         requestedExt[k] = Helpers.sanitizeManifest(v, baseUrl);
@@ -117,10 +123,11 @@ async function setup() {
   }
 }
 
-async function clearTokens() {
-  const existingTokens = await db.list('tokens', {identityId:identity.id, baseUrl:baseUrl.href});
-  for (const {id} of Object.values(existingTokens)) {
-    await db.delete('tokens', id);
+// Drops the session of the previous sign-in to this website, so that its session key opens no more requests
+async function clearSession() {
+  const existingSessions = await db.list('sessions', {identityId:identity.id, baseUrl:baseUrl.href});
+  for (const {id} of Object.values(existingSessions)) {
+    await db.delete('sessions', id);
   }
 }
 
@@ -163,33 +170,33 @@ async function confirm(){
 
     website = await storeWebsite(website);
 
-    await clearTokens();
-
     const signedMetadata = {};
 
-    for (const type of TOKEN_TYPES) {
-      if (requestedExt[type]) {
-        const value = ':' + Triauth.Helpers.randomString(24);
-
-        signedMetadata.ext ||= {};
-        signedMetadata.ext[type] = value;
-
-        await db.add('tokens', {
-          identityId: identity.id,
-          websiteId: website.id,
-          baseUrl: baseUrl.href,
-          origin: baseUrl.origin,
-          type,
-          value,
-          createdAt: Date.now()
-        })
-      }
+    // The response tells the website the decision on each permission. Approval grants all of them.
+    if (Object.keys(requestedPermissions).length > 0) {
+      signedMetadata.ext = {permissions: {...requestedPermissions}};
     }
 
     const authenticator = new Authenticator(identity, identity.signers);
     const responseData = await authenticator.process('auth', baseUrl.href, challenge.challengeString, signedMetadata);
 
-    Helpers.sendResponse(callbackMethod, callbackUrl, await Helpers.sealResponse(challenge, responseData));
+    // Sealing the response also gives the session key, which only the website and this authenticator know. The
+    // requests that follow this sign-in are sealed under it, and contain its ID (skid) so that they can be found.
+    const {sealedResponse, sessionKey} = await Helpers.sealResponse(challenge, responseData);
+
+    await clearSession();
+
+    await db.add('sessions', {
+      identityId: identity.id,
+      websiteId: website.id,
+      baseUrl: baseUrl.href,
+      sessionKey,
+      skid: await Triauth.RequestCipher.skid(sessionKey),
+      permissions: {ping: requestedPermissions.ping === true, stamp: requestedPermissions.stamp === true},
+      createdAt: Date.now()
+    });
+
+    Helpers.sendResponse(callbackMethod, callbackUrl, sealedResponse);
 
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
@@ -203,7 +210,7 @@ async function deny() {
   if (busyRef.value) return;
   busyRef.value = true;
 
-  await clearTokens();
+  await clearSession();
 
   stateRef.value = 'denied';
 

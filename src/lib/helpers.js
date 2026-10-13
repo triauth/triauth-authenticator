@@ -21,25 +21,61 @@ export const Helpers = {
 
   getBaseUrl: (url) => new URL(Triauth.Helpers.getBaseUrl(String(url))),
 
-  // True when a token row carries an expiry and it has passed; tokens without
-  // expiresAt never expire.
-  tokenExpired: (token) => !!(token?.expiresAt && token.expiresAt < Date.now()),
+  // True when a row has an expiry (expiresAt) and it has passed. A row without an expiry does not expire.
+  expired: (row) => !!(row?.expiresAt && row.expiresAt < Date.now()),
 
-  parseRequest: (url, expectedType) => {
+  // Opens a request that follows a sign-in. It finds the session of that sign-in by the `skid` parameter, and decrypts
+  // the `request` parameter with its session key into the challenge. It throws when there is no such session, or when
+  // the request does not open. The pages then send no answer to such a request, because nothing in it can be trusted.
+  openRequest: async (url) => {
     const params = Helpers.urlFragmentParams(url);
+    const skid = params.get('skid');
+    const request = params.get('request');
 
-    // Extract the challenge
-    const challengeString = params.get('challenge');
+    if (!/^[A-Za-z0-9_-]{22}$/.test(skid ?? '') || !request) {
+      throw new AppError('Request or skid parameter is missing or invalid', {skid, request});
+    }
 
+    const session = await db.find('sessions', {skid});
+
+    if (!session) {
+      throw new AppError('No matching session found', {skid});
+    }
+
+    try {
+      return {session, challengeString: await Triauth.RequestCipher.open(session.sessionKey, request)};
+    } catch (err) {
+      throw new AppError('Request could not be opened', {skid, cause:err});
+    }
+  },
+
+  // Loads the identity of a session. The request must be for the identity and the website (base URL) of the sign-in
+  // that the user approved.
+  sessionIdentity: async (session, identifier, baseUrl) => {
+    const identity = await db.get('identities', session.identityId);
+
+    if (identity?.identifier !== identifier) {
+      throw new AppError(`This is a problem with the website: its request is for ${identifier}, but its session key is from the sign-in of ${identity?.identifier}. Please let the website know.`, {sessionId: session.id, identifier});
+    }
+
+    if (session.baseUrl !== baseUrl.href) {
+      throw new AppError(`This is a problem with the website: its callback URL must be in ${session.baseUrl}, the directory of its sign-in, but it is in ${baseUrl.href}. Please let the website know.`, {sessionId: session.id, baseUrl: baseUrl.href});
+    }
+
+    return identity;
+  },
+
+  // Validates and decodes a challenge, which is the readable one of a sign-in or the one that openRequest decrypted
+  parseChallenge: (challengeString, expectedType) => {
     if (!Triauth.Validator.validateChallenge(challengeString).valid) {
-      throw new AppError('challenge parameter is missing or invalid', {challengeString});
+      throw new AppError('Challenge is missing or invalid', {challengeString});
     }
 
     let challenge;
     try {
       challenge = Triauth.Challenge.fromString(challengeString);
     } catch(err) {
-      throw new AppError('challenge parameter could not be decoded', {challengeString, cause:err});
+      throw new AppError('Challenge could not be decoded', {challengeString, cause:err});
     }
 
     // The flow type is bound by the endpoint path: each page signs only its own verb,
@@ -76,18 +112,6 @@ export const Helpers = {
       throw new AppError('This is a problem with the website: its request has no valid encryption key. Please let the website know.', {ek: challenge.data.ek});
     }
 
-    // Extract the request authentication code (HMAC) from the `token` parameter
-    const tokenParam = params.get('token');
-    let hmac = null;
-
-    if (tokenParam !== null) {
-      const parts = tokenParam.split(':');
-
-      if (parts.length === 2 && Triauth.Helpers.isBase64UrlString(parts[1])) {
-        hmac = parts[1];
-      }
-    }
-
     const identifier = challenge.identity.identifier;
 
     // An operator setting (domains.js): this instance signs only for the domains it serves
@@ -96,10 +120,8 @@ export const Helpers = {
     }
 
     return {
-      params,
       challengeString,
       challenge,
-      hmac,
       identifier,
       ext,
       callbackUrl,
@@ -108,10 +130,11 @@ export const Helpers = {
   },
 
   // The response is sealed to the challenge's encryption key (`ek`), so it travels as ciphertext and only the website
-  // that holds the challenge can open it. parseRequest has already refused a challenge without a valid `ek`.
+  // that has the challenge can open it. parseChallenge has already refused a challenge without a valid `ek`.
+  // Resolves to `{sealedResponse, sessionKey}`. The session key is the secret of a sign-in (see AuthPage.vue).
   sealResponse: (challenge, responseString) => Triauth.ResponseCipher.seal(challenge.data.ek, responseString),
 
-  // GET is the default when the website names no method (parseRequest refuses unknown ones)
+  // GET is the default when the website sets no method (parseChallenge refuses unknown ones)
   sendResponse: (method, url, responseString) => {
     url = new URL(url);
 
@@ -143,35 +166,6 @@ export const Helpers = {
       url.searchParams.set('response', responseString);
 
       window.location.replace(url);
-    }
-  },
-
-  ensureValidHmac: async (hmac, tokenValue, challengeString) => {
-    try {
-      if (!Triauth.Helpers.isBase64UrlString(hmac) || !Triauth.Helpers.isBase64UrlString(challengeString)) {
-        throw new AppError('Invalid format of hmac or challenge parameters', {hmac, challengeString});
-      }
-
-      const tokenKey = await crypto.subtle.importKey(
-        'raw', new TextEncoder().encode(tokenValue),
-        { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']
-      );
-
-      const isHmacValid = await crypto.subtle.verify(
-        'HMAC', tokenKey,
-        Triauth.Helpers.base64UrlToUint8(hmac),
-        Triauth.Helpers.base64UrlToUint8(challengeString)
-      );
-
-      if (!isHmacValid) {
-        throw new AppError('HMAC does not match');
-      }
-
-      return isHmacValid;
-
-    } catch (err) {
-      throw new AppError('HMAC verification failed', {hmac, challengeString, cause:err});
-
     }
   },
 

@@ -16,8 +16,11 @@ import {Helpers} from "../lib/helpers.js";
 
 import {AppError} from "../lib/errors.js";
 
-// One of 'verifying', 'error', 'pending', 'denied', 'responseVerified'
+// One of 'verifying', 'unopened', 'error', 'pending', 'denied', 'responseVerified'
 const stateRef = ref('verifying');
+
+// A tab that opened on this request has no previous page to go back to
+const canGoBack = window.history.length > 1;
 
 let challenge = null;
 let challengeDigest = null;
@@ -56,20 +59,20 @@ async function setup() {
 async function verifyResponse(params) {
   try {
     const response = params.get('response');
-    const tokenValue = params.get('verifyToken');
+    const verificationId = params.get('verification');
 
     if (!Triauth.Validator.validateResponse(response).valid) {
       throw new AppError('Invalid or missing response parameter', {response});
     }
 
-    if (typeof tokenValue !== 'string' || tokenValue.length === 0 || Triauth.Helpers.byteSize(tokenValue) > 128) {
-      throw new AppError('Invalid or missing token parameter', {tokenValue});
+    if (typeof verificationId !== 'string' || verificationId.length === 0 || Triauth.Helpers.byteSize(verificationId) > 128) {
+      throw new AppError('Invalid or missing verification parameter', {verificationId});
     }
 
-    // Save the response to the verification request in the tokens DB
-    const existingToken = await db.find('tokens', {value: tokenValue, type: 'attestVerifyToken'});
-    if (existingToken?.id && !existingToken.response && !Helpers.tokenExpired(existingToken)) {
-      await db.patch('tokens', {id: existingToken.id, response, lastUsedAt: Date.now()});
+    // Save the provider's response to the verification that the attest page started
+    const verification = await db.get('verifications', verificationId);
+    if (verification && !verification.response && !Helpers.expired(verification)) {
+      await db.patch('verifications', {id: verification.id, response});
     }
 
     stateRef.value = 'responseVerified';
@@ -85,9 +88,21 @@ async function verifyResponse(params) {
 }
 
 async function verifyRequest() {
+  let session, challengeString;
+
   try {
-    const requestData = Helpers.parseRequest(window.location, 'attest');
-    const {identifier, ext, hmac, challengeString} = requestData;
+    ({session, challengeString} = await Helpers.openRequest(window.location));
+
+  } catch (err) {
+    // A request that does not open gets no answer (see Helpers.openRequest)
+    Triauth.config.logger.error(err, err.data);
+    stateRef.value = 'unopened';
+    return;
+  }
+
+  try {
+    const requestData = Helpers.parseChallenge(challengeString, 'attest');
+    const {identifier, ext} = requestData;
 
     challenge = requestData.challenge;
     baseUrl = requestData.baseUrl;
@@ -96,29 +111,14 @@ async function verifyRequest() {
     // Do the security checks for referrer
     Helpers.ensureReferrerMatch(baseUrl);
 
-    // Load the requested identity
-    identity = await db.find('identities', {identifier});
+    identity = await Helpers.sessionIdentity(session, identifier, baseUrl);
 
-    if (!identity) {
-      throw new AppError(`A website tried to request an attestation for ${challenge.identity.identifier}, but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
-    }
+    await db.patch('sessions', {id: session.id, lastUsedAt: Date.now()});
 
-    // Find the token that should be used with this request
-    const token = await db.find('tokens', {type:'attestToken', identityId:identity.id, baseUrl:baseUrl.href });
-
-    if (!token || Helpers.tokenExpired(token)) {
-      throw new AppError('The referring website used an invalid or expired token', {identityId:identity.id, baseUrl:baseUrl.href});
-    }
-
-    // Do the security checks for hmac token
-    await Helpers.ensureValidHmac(hmac, token.value, challengeString);
-
-    await db.patch('tokens', {id: token.id, lastUsedAt: Date.now()});
-
-    // Double-check that the website entry in DB exists for the given token, and that the website has permission
-    website = await db.find('websites', {id: token.websiteId, identityId:identity.id});
+    // Double-check that the website entry in DB exists for the given session
+    website = await db.find('websites', {id: session.websiteId, identityId:identity.id});
     if (!website) {
-      throw new AppError('The referring website is not recognized', {tokenId:token.id, websiteId:token.websiteId, identityId:identity.id});
+      throw new AppError('The referring website is not recognized', {sessionId:session.id, websiteId:session.websiteId, identityId:identity.id});
     }
 
     // Validate the attestations, as embedded in challenge.data.attest
@@ -134,9 +134,9 @@ async function verifyRequest() {
     // Compute the challenge digest to be used in verifications
     challengeDigest = await Triauth.Helpers.sha256(challenge.challengeString);
 
-    // If there are any requested attestations present, start the loop to listen for attestVerifyToken changes (responses from verification providers)
+    // If there are any requested attestations present, start the loop that reads the responses of the verification providers
     if (Object.keys(requestedAttestRef.value).length > 0) {
-      refreshAttestationTokensLoop();
+      refreshVerificationsLoop();
     }
 
     // Extract the callbackMethod from ext
@@ -155,31 +155,27 @@ async function verifyRequest() {
 async function performVerification(attestId) {
   try {
 
-    // Cleanup previously issued token for this verification provider (if any)
-    const existingToken = requestedAttestRef.value[attestId].token;
-    if (existingToken?.id) {
-      requestedAttestRef.value[attestId].token = undefined;
-      await db.delete('tokens', existingToken.id);
+    // Cleanup the verification started earlier for this attestation (if any)
+    const previousVerification = requestedAttestRef.value[attestId].verification;
+    if (previousVerification?.id) {
+      requestedAttestRef.value[attestId].verification = undefined;
+      await db.delete('verifications', previousVerification.id);
     }
 
     const url = new URL(requestedAttestRef.value[attestId].selectedProvider);
 
-    const tokenValue = Triauth.Helpers.randomString(24);
-
-    const token = await db.add('tokens', {
+    // The ID is a one-time random value, which the provider sends back with its response
+    const verification = await db.add('verifications', {
+      id: Triauth.Helpers.randomString(24),
       identityId: identity.id,
       websiteId: website.id,
-      baseUrl: url.href,
-      origin: url.origin,
-      type: 'attestVerifyToken',
-      value: tokenValue,
       createdAt: Date.now(),
       expiresAt: Date.now() + 30 * 60e3
     });
 
-    requestedAttestRef.value[attestId].token = token;
+    requestedAttestRef.value[attestId].verification = verification;
 
-    url.searchParams.set('callbackUrl', window.location.origin + window.location.pathname + '#?verifyToken=' + tokenValue);
+    url.searchParams.set('callbackUrl', window.location.origin + window.location.pathname + '#?verification=' + verification.id);
     url.searchParams.set('challenge', challengeDigest);
 
     window.open(url, '_blank', 'noopener');
@@ -192,34 +188,34 @@ async function performVerification(attestId) {
   }
 }
 
-async function refreshAttestationTokens() {
+async function refreshVerifications() {
   for (const [k,v] of Object.entries(requestedAttestRef.value)) {
-    if (v.token && !v.token.response) {
-      v.token = await db.find('tokens', {id:v.token.id});
-      if (v.token.response) {
+    if (v.verification && !v.verification.response) {
+      v.verification = await db.get('verifications', v.verification.id);
+      if (v.verification.response) {
 
         // Verify the response - the verification is quite lax, as the client website will do the final proper verification
-        const verifyRes = await Triauth.verify(challengeDigest, v.token.response, {
+        const verifyRes = await Triauth.verify(challengeDigest, v.verification.response, {
           type: 'attest',
           notBefore: pageLoadTimestamp - Triauth.config.maximalAllowedClientClockDrift,
           notAfter: Date.now() + Triauth.config.maximalAllowedClientClockDrift
         });
 
-        v.token.isVerified = verifyRes?.valid === true;
+        v.verification.isVerified = verifyRes?.valid === true;
       }
     }
   }
 }
 
 let attestPollTimer = null;
-async function refreshAttestationTokensLoop() {
+async function refreshVerificationsLoop() {
   try {
-    await refreshAttestationTokens();
+    await refreshVerifications();
   } catch (err) {
     // e.g. a read aborted when the browser froze this tab while the provider was open; keep polling
     Triauth.config.logger.error(err);
   }
-  attestPollTimer = setTimeout(refreshAttestationTokensLoop, 500);
+  attestPollTimer = setTimeout(refreshVerificationsLoop, 500);
 }
 
 function stopAttestPoll() {
@@ -228,22 +224,19 @@ function stopAttestPoll() {
 }
 onUnmounted(stopAttestPoll);
 
-// Cleans up used and expired attestVerifyTokens
-async function cleanupTokens() {
+// Cleans up the verifications of this page, and the expired ones
+async function cleanupVerifications() {
   for (const [k,v] of Object.entries(requestedAttestRef.value)) {
-    if (v.token?.id) {
-      await db.delete('tokens', v.token.id);
+    if (v.verification?.id) {
+      await db.delete('verifications', v.verification.id);
     }
   }
 
-  const now = Date.now();
-  const attestVerifyTokens = await db.list('tokens', {type: 'attestVerifyToken'});
+  await db.sweepExpired('verifications');
+}
 
-  for (const token of Object.values(attestVerifyTokens)) {
-    if (token.expiresAt && token.expiresAt < now) {
-      await db.delete('tokens', token.id);
-    }
-  }
+function goBack() {
+  window.history.back();
 }
 
 async function deny() {
@@ -251,7 +244,7 @@ async function deny() {
   busyRef.value = true;
 
   stopAttestPoll();
-  await cleanupTokens();
+  await cleanupVerifications();
 
   stateRef.value = 'denied';
 
@@ -273,14 +266,16 @@ async function confirm() {
     const signatures = [selfSig];
 
     for (const [k,v] of Object.entries(requestedAttestRef.value)) {
-      signatures.push(v.token.response);
+      signatures.push(v.verification.response);
     }
 
     const response = Triauth.MultiSignature.generate(...signatures);
 
-    await cleanupTokens();
+    await cleanupVerifications();
 
-    Helpers.sendResponse(callbackMethod, callbackUrl, await Helpers.sealResponse(challenge, response));
+    const {sealedResponse} = await Helpers.sealResponse(challenge, response);
+
+    Helpers.sendResponse(callbackMethod, callbackUrl, sealedResponse);
 
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
@@ -303,9 +298,16 @@ async function confirm() {
       Verifying, please wait ...
     </div>
 
+    <div class="p-5 flex flex-col gap-4 text-center" v-else-if="stateRef === 'unopened'">
+      <div class="font-bold p-2">Attestation request could not be opened</div>
+      <div class="text-sm p-2">Sign in to the website again, and then try again.</div>
+      <div class="p-2" v-if="canGoBack"><Button @click="goBack()">Back to the website</Button></div>
+      <div class="p-2" v-else>You can close this tab</div>
+    </div>
+
     <div class="p-5 flex flex-col gap-4 text-center" v-else-if="stateRef === 'error'">
       <div class="font-bold p-2">Attestation request could not be processed</div>
-      <div class="text-sm p-2">{{errorMessageRef}}</div>
+      <div class="text-sm p-2 break-words">{{errorMessageRef}}</div>
       <div class="p-2">You can close this tab or navigate back to the previous page</div>
     </div>
 
@@ -337,9 +339,9 @@ async function confirm() {
             <div class="m-7 mt-0 my-4 pt-4 p-6 text-left border-y-gray-200 bg-gray-50 rounded-lg">
               <div class="font-bold py-2 flex align-middle">
                 <label class="grow">{{val.label}}</label>
-                <VerifiedIcon v-if="val.token?.isVerified"/>
+                <VerifiedIcon v-if="val.verification?.isVerified"/>
               </div>
-              <div class="text-sm py-2 text-slate-800 flex justify-between" v-if="!val.token?.isVerified">
+              <div class="text-sm py-2 text-slate-800 flex justify-between" v-if="!val.verification?.isVerified">
                 <Select v-model="val.selectedProvider" :options="val.providers" placeholder="Select verification provider" class="grow max-w-[65%]"/>
                 <Button @click="performVerification(key)" class="font-normal" v-if="val.selectedProvider"><OpenInNewIcon/> Click to verify</Button>
               </div>
@@ -354,10 +356,10 @@ async function confirm() {
           </div>
       </div>
 
-      <div class="p-2 bg-yellow-200 inline-block rounded text-gray-800 text-sm" v-if="!Object.values(requestedAttestRef).every((v) => v.token?.isVerified)">Please complete the required verifications before you continue.</div>
+      <div class="p-2 bg-yellow-200 inline-block rounded text-gray-800 text-sm" v-if="!Object.values(requestedAttestRef).every((v) => v.verification?.isVerified)">Please complete the required verifications before you continue.</div>
 
       <div class="flex flex-col md:flex-row-reverse md:mx-4 gap-4 text-center justify-between mt-4">
-        <Button @click="confirm()" :disabled="inCoolOffPeriodRef || busyRef || !Object.values(requestedAttestRef).every((v) => v.token?.isVerified)" class="md:w-1/2">Confirm</Button>
+        <Button @click="confirm()" :disabled="inCoolOffPeriodRef || busyRef || !Object.values(requestedAttestRef).every((v) => v.verification?.isVerified)" class="md:w-1/2">Confirm</Button>
         <Button variant="outlined" @click="deny" :disabled="busyRef" class="md:w-1/2">Deny</Button>
       </div>
     </div>
