@@ -1,5 +1,5 @@
 /*!
- * triauth-js v1.0.0-beta.1
+ * triauth-js v1.0.0-beta.2
  *
  * See https://www.triauth.org/ and https://github.com/triauth/triauth-js/ for more details.
  *
@@ -4460,7 +4460,7 @@
    * so that the authenticator can find the key. Only the client application and the authenticator know the session
    * key, so a request that opens also proves where it comes from.
    *
-   * A sealed request is `<nonce>.<ciphertext>`, both base64url. The plaintext is the JSON of the challenge.
+   * A sealed request is `<iv>.<ciphertext>`, both base64url. The plaintext is the JSON of the challenge.
    *
    * @class
    * @memberof Triauth
@@ -4486,37 +4486,37 @@
      * @param sessionKey {string} - the session key, 43 base64url characters, without the domain of a delegated key.
      * @param challenge {string} - the challenge, base64url.
      *
-     * @returns {Promise<string>} the sealed request, `<nonce>.<ciphertext>`.
+     * @returns {Promise<string>} the sealed request, `<iv>.<ciphertext>`.
      */
     static async seal(sessionKey, challenge) {
-      // The nonce comes from Web Crypto and never from `randomSource`. A repeated nonce breaks AES-GCM.
-      const nonce = crypto.getRandomValues(new Uint8Array(12));
+      // The IV comes from Web Crypto and never from `randomSource`. A repeated IV under one key breaks AES-GCM.
+      const iv = crypto.getRandomValues(new Uint8Array(12));
       const ct = await crypto.subtle.encrypt(
-        {name: 'AES-GCM', iv: nonce}, await this.#requestKey(sessionKey, 'encrypt'), /** @type {BufferSource} */ (Helpers.base64UrlToUint8(challenge))
+        {name: 'AES-GCM', iv}, await this.#requestKey(sessionKey, 'encrypt'), /** @type {BufferSource} */ (Helpers.base64UrlToUint8(challenge))
       );
 
-      return Helpers.arrayBufferToBase64Url(nonce) + '.' + Helpers.arrayBufferToBase64Url(ct);
+      return Helpers.arrayBufferToBase64Url(iv) + '.' + Helpers.arrayBufferToBase64Url(ct);
     }
 
     /**
      * Opens a sealed request with the session key. This is the authenticator's side.
      *
      * @param sessionKey {string} - the session key, 43 base64url characters, without the domain of a delegated key.
-     * @param sealedRequest {string} - the sealed request, `<nonce>.<ciphertext>`.
+     * @param sealedRequest {string} - the sealed request, `<iv>.<ciphertext>`.
      *
      * @returns {Promise<string>} the challenge, base64url.
      *
      * @throws {Error} when the sealed request is malformed, or does not open under this session key.
      */
     static async open(sessionKey, sealedRequest) {
-      const [nonce, ct, rest] = String(sealedRequest).split('.');
+      const [iv, ct, rest] = String(sealedRequest).split('.');
 
-      if (rest !== undefined || nonce?.length !== 16 || !ct) {
+      if (rest !== undefined || iv?.length !== 16 || !ct) {
         throw new TypeError('Malformed sealed request');
       }
 
       const pt = await crypto.subtle.decrypt(
-        {name: 'AES-GCM', iv: /** @type {BufferSource} */ (Helpers.base64UrlToUint8(nonce))},
+        {name: 'AES-GCM', iv: /** @type {BufferSource} */ (Helpers.base64UrlToUint8(iv))},
         await this.#requestKey(sessionKey, 'decrypt'), /** @type {BufferSource} */ (Helpers.base64UrlToUint8(ct))
       );
 
