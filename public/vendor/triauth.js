@@ -1,5 +1,5 @@
 /*!
- * triauth-js v1.0.0-beta.1
+ * triauth-js v1.0.0-beta.2
  *
  * See https://www.triauth.org/ and https://github.com/triauth/triauth-js/ for more details.
  *
@@ -1038,8 +1038,7 @@
     /**
      * Computes the HMAC-SHA-256 of a message under a key.
      *
-     * Keys the private-mode identity-domain derivation (`Triauth.IdentityDomain.deriveFullLabel`) and
-     * binds the redirect token of the challenge-response flows to the challenge.
+     * Keys the private-mode identity-domain derivation (`Triauth.IdentityDomain.deriveFullLabel`).
      *
      * @param key {Uint8Array} - The key bytes.
      * @param message {Uint8Array} - The message bytes.
@@ -1308,7 +1307,7 @@
       223: 'Invalid challenge',
       224: 'Invalid response',
       225: 'Invalid signature',
-      226: 'Invalid token',
+      226: 'Invalid session key',
       227: 'Invalid message',
       228: 'Invalid attachments',
       229: 'Invalid attestations',
@@ -1550,6 +1549,31 @@
     }
 
     /**
+     * Validates the sealed response received in stage 3 of an authentication flow, before it is opened.
+     *
+     * A sealed response is `<enc>.<ciphertext>`, both base64url: an 87-character encapsulated key, and a ciphertext of
+     * at least the 16-byte authentication tag, bounded by the sealed size of the largest response envelope.
+     *
+     * @param response {String} - Sealed response that should be validated.
+     *
+     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     */
+    static validateSealedResponse(response) {
+      const errors = [];
+      const maxLength = 87 + 1 + Math.ceil((LIMITS.signatureBytesize + 16) * 4 / 3);
+
+      if (
+        typeof response !== 'string' ||
+        response.length > maxLength ||
+        !/^[A-Za-z0-9_-]{87}\.[A-Za-z0-9_-]{22,}$/.test(response)
+      ) {
+        errors.push(224);
+      }
+
+      return this.#expandResult(errors);
+    }
+
+    /**
      * Validates the message string to be signed or stamped in a {@link Triauth.sign} or {@link Triauth.stamp} flow.
      *
      * @param message {String} - Message that should be validated.
@@ -1647,40 +1671,35 @@
     }
 
     /**
-     * Validates the `token` that gates stage 1 of {@link Triauth.ping}, {@link Triauth.sign}, {@link Triauth.stamp}, and {@link Triauth.attest}.
+     * Validates the `sessionKey` that gates stage 1 of {@link Triauth.ping}, {@link Triauth.sign}, {@link Triauth.stamp}, and {@link Triauth.attest}.
      *
-     * A token has the form `issuer:secret` — an issuer prefix that is either empty (the identifier's own domain) or the
-     * lowercase domain name whose endpoint record names the authenticator that minted the token, a single `:`, and a
-     * secret of at least 16 characters. The whole token keys the HMAC that binds the challenge to the token holder,
-     * and must be a normal string within the allowed byte size.
+     * A session key is the `sessionKey` of a {@link Triauth.authenticate} result, 32 bytes in 43 base64url characters.
+     * After a delegated sign-in it is `<domain>:<key>`, with the lowercase domain name of the actor.
      *
-     * @param token {String} - Token that should be validated.
+     * @param sessionKey {String} - Session key that should be validated.
      *
      * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
      */
-    static validateToken(token) {
-      const errors = [];
+    static validateSessionKey(sessionKey) {
+      const parts = typeof sessionKey === 'string' ? sessionKey.split(':') : [];
+      const [domain, key] = parts.length === 2 ? parts : [null, parts[0]];
 
       if (
-        typeof token !== 'string' ||
-        !Helpers.isNormalString(token)
+        parts.length < 1 || parts.length > 2 ||
+        (domain !== null && !(Helpers.isDomainName(domain) && domain === domain.toLowerCase())) ||
+        key.length !== 43 || !Helpers.isBase64UrlString(key)
       ) {
         return this.#expandResult([226]);
       }
 
-      // Validate token structure
-      const [tokenDomainName, tokenSecret, rest] = token.split(':');
-
-      if (
-        (tokenDomainName && !Helpers.isDomainName(tokenDomainName)) ||
-        tokenDomainName.toLowerCase() !== tokenDomainName ||
-        (tokenSecret || '').length < 16 ||
-        rest !== undefined
-      ) {
-        errors.push(226);
+      // The canonical base64url of 32 bytes has no data in the unused bits of its last character
+      try {
+        Helpers.base64UrlToUint8(key);
+      } catch {
+        return this.#expandResult([226]);
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult([]);
     }
 
     /**
@@ -3367,7 +3386,8 @@
     /**
      * Recreates the Challenge from the given challenge.
      *
-     * @param challengeString {string} - a challenge, typically as stored during the stage 1 of challenge-response flow.
+     * @param challengeString {string} - a challenge as sent to the authenticator: the part of the challenge stored during
+     *                                   stage 1 of the challenge-response flow before its `.` and decryption key.
      * @param [config={}] {object} - optional overrides for the global Triauth.config settings
      *
      * @returns {Challenge}
@@ -4122,6 +4142,405 @@
 
   }
 
+  const P256 = { name: 'ECDH', namedCurve: 'P-256' };
+  const EMPTY = new Uint8Array(0);
+
+  // The version label at the start of every labeled HKDF input (RFC 9180, section 4)
+  const HPKE_V1 = Helpers.stringToUtf8Bytes('HPKE-v1');
+
+  // The suite identifiers of the labeled HKDF steps, with the IDs from RFC 9180, section 7. KEM_ID is "KEM" and the KEM
+  // ID 0x0010 for DHKEM(P-256, HKDF-SHA256), as in RFC 9180, section 4.1. SUITE_ID is "HPKE", the same KEM ID, the KDF ID
+  // 0x0001 for HKDF-SHA256 and the AEAD ID 0x0001 for AES-128-GCM, as in RFC 9180, section 5.1.
+  const KEM_ID = Uint8Array.of(0x4b, 0x45, 0x4d, 0x00, 0x10);
+  const SUITE_ID = Uint8Array.of(0x48, 0x50, 0x4b, 0x45, 0x00, 0x10, 0x00, 0x01, 0x00, 0x01);
+
+  // The `info` of the key schedule (RFC 9180, section 5.1). It binds every sealed response to this protocol and version,
+  // so a response sealed for another application or version does not open.
+  const INFO = Helpers.stringToUtf8Bytes('triauth/response/v1');
+
+  // The `exporter_context` of the session key (RFC 9180, section 5.3)
+  const SESSION_KEY = Helpers.stringToUtf8Bytes('triauth/session-key');
+
+  /**
+   * Seals and opens the responses of the challenge-response flows, so that a response travels only as ciphertext.
+   *
+   * The construction is HPKE, Hybrid Public Key Encryption (RFC 9180, https://www.rfc-editor.org/rfc/rfc9180). HPKE
+   * encrypts a message to a public key in three steps. The sender makes a one-time key pair and runs ECDH with the
+   * recipient's public key to get a shared secret. HKDF derives an AES key and a nonce from that secret. AES-GCM encrypts
+   * the message and adds a tag that detects any change. The sender's one-time public key (`enc`) goes with the
+   * ciphertext. With it, the recipient runs ECDH with its private key and derives the same AES key.
+   *
+   * This class uses the DHKEM(P-256, HKDF-SHA256), HKDF-SHA256 and AES-128-GCM suite in base mode, single shot. Base
+   * mode has no pre-shared key and does not authenticate the sender. The signatures inside the response do that. Single
+   * shot means that each key schedule encrypts one message.
+   *
+   * The client application mints a fresh key pair for every challenge. The challenge contains the public key as `ek`,
+   * and the private key stays with the stored challenge. The Triauth Authenticator seals the response to `ek`, so only
+   * the holder of the stored challenge can open it.
+   *
+   * A sealed response is `<enc>.<ciphertext>`, both base64url.
+   *
+   * Sealing and opening a response give both sides the same session key. HPKE secret export (RFC 9180, section 5.3)
+   * derives it from the encryption context of the response, so the key never travels. The session key does not open
+   * any response, because the export is separate from the AES key and the nonce.
+   *
+   * @class
+   * @memberof Triauth
+   */
+  class ResponseCipher {
+
+    /**
+     * Mints a fresh key pair for one challenge.
+     *
+     * @returns {Promise<{encryptionKey: string, decryptionKey: string}>} `encryptionKey` is the public key for the
+     *          challenge's `ek`, an uncompressed P-256 point in 87 base64url characters. `decryptionKey` is the private
+     *          scalar in 43 base64url characters, which stays with the stored challenge.
+     */
+    static async generateKeyPair() {
+      const keyPair = await crypto.subtle.generateKey(P256, true, ['deriveBits']);
+
+      return {
+        encryptionKey: Helpers.arrayBufferToBase64Url(await crypto.subtle.exportKey('raw', keyPair.publicKey)),
+        decryptionKey: (await crypto.subtle.exportKey('jwk', keyPair.privateKey)).d
+      };
+    }
+
+    /**
+     * Seals a response envelope to the challenge's encryption key. This is the authenticator's side. Every call makes a
+     * new one-time key pair, so the same envelope seals to different bytes and a different session key each time.
+     *
+     * @param encryptionKey {string} - the challenge's `ek`.
+     * @param response {string} - the response envelope (`|...|`).
+     *
+     * @returns {Promise<{sealedResponse: string, sessionKey: string}>} the sealed response, `<enc>.<ciphertext>`, and
+     *          the session key of this response in 43 base64url characters.
+     *
+     * @throws {Error} when the encryption key is not a P-256 point.
+     */
+    static async seal(encryptionKey, response) {
+      const {enc, ct, exporterSecret} = await this.sealBase(Helpers.base64UrlToUint8(encryptionKey), INFO, EMPTY, Helpers.stringToUtf8Bytes(response));
+
+      return {
+        sealedResponse: Helpers.arrayBufferToBase64Url(enc) + '.' + Helpers.arrayBufferToBase64Url(ct),
+        sessionKey: Helpers.arrayBufferToBase64Url(await this.export(exporterSecret, SESSION_KEY, 32))
+      };
+    }
+
+    /**
+     * Opens a sealed response with the key pair of its challenge. This is the client application's side.
+     *
+     * @param encryptionKey {string} - the challenge's `ek`.
+     * @param decryptionKey {string} - the private scalar kept with the stored challenge.
+     * @param sealedResponse {string} - the sealed response, `<enc>.<ciphertext>`.
+     *
+     * @returns {Promise<{response: string, sessionKey: string}>} the response envelope, and the session key of this
+     *          response in 43 base64url characters, the same that `seal` gave.
+     *
+     * @throws {Error} when the sealed response is malformed, or was not sealed to this key pair.
+     */
+    static async open(encryptionKey, decryptionKey, sealedResponse) {
+      const [enc, ct, rest] = String(sealedResponse).split('.');
+
+      if (rest !== undefined || !enc || !ct) {
+        throw new TypeError('Malformed sealed response');
+      }
+
+      const pkRm = Helpers.base64UrlToUint8(encryptionKey);
+      const skR = await crypto.subtle.importKey('jwk', {
+        kty: 'EC', crv: 'P-256', d: decryptionKey,
+        x: Helpers.arrayBufferToBase64Url(pkRm.subarray(1, 33)),
+        y: Helpers.arrayBufferToBase64Url(pkRm.subarray(33, 65))
+      }, P256, false, ['deriveBits']);
+
+      const {pt, exporterSecret} = await this.openBase(Helpers.base64UrlToUint8(enc), skR, pkRm, INFO, EMPTY, Helpers.base64UrlToUint8(ct));
+
+      return {
+        response: Helpers.utf8BytesToString(pt),
+        sessionKey: Helpers.arrayBufferToBase64Url(await this.export(exporterSecret, SESSION_KEY, 32))
+      };
+    }
+
+    /**
+     * HPKE single-shot seal in base mode (RFC 9180, section 6.1). Encap makes the one-time key pair and the shared
+     * secret (RFC 9180, section 4.1). The key schedule derives the AES key and nonce (RFC 9180, section 5.1). AES-GCM
+     * then encrypts the plaintext.
+     *
+     * @param pkRm {Uint8Array} - the recipient's public key, an uncompressed P-256 point.
+     * @param info {Uint8Array} - the application context.
+     * @param aad {Uint8Array} - the associated data, authenticated but not encrypted.
+     * @param pt {Uint8Array} - the plaintext.
+     * @param [ephemeral=null] {?CryptoKeyPair} - a fixed sender key pair, only for known-answer tests such as the
+     *   RFC 9180 test vector A.3.1. Reusing it for the same recipient repeats the AES key and nonce, which breaks AES-GCM.
+     *
+     * @returns {Promise<{enc: Uint8Array, ct: Uint8Array, exporterSecret: Uint8Array}>} the encapsulated key (the
+     *          sender's one-time public key), the ciphertext with its 16-byte tag, and the exporter secret for `export`.
+     */
+    static async sealBase(pkRm, info, aad, pt, ephemeral = null) {
+      ephemeral ??= await crypto.subtle.generateKey(P256, true, ['deriveBits']);
+
+      const enc = new Uint8Array(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
+      const {key, nonce, exporterSecret} = await this.#keySchedule(await this.#ecdh(ephemeral.privateKey, pkRm), enc, pkRm, info);
+      const ct = await crypto.subtle.encrypt(
+        {name: 'AES-GCM', iv: /** @type {BufferSource} */ (nonce), additionalData: /** @type {BufferSource} */ (aad)},
+        key, /** @type {BufferSource} */ (pt)
+      );
+
+      return {enc, ct: new Uint8Array(ct), exporterSecret};
+    }
+
+    /**
+     * HPKE single-shot open in base mode (RFC 9180, section 6.1). Decap recovers the shared secret from `enc` and the
+     * recipient's private key (RFC 9180, section 4.1). The key schedule derives the same AES key and nonce (RFC 9180,
+     * section 5.1). AES-GCM then decrypts the ciphertext and checks its tag.
+     *
+     * @param enc {Uint8Array} - the encapsulated key, the sender's one-time public key.
+     * @param skR {CryptoKey} - the recipient's private key.
+     * @param pkRm {Uint8Array} - the recipient's public key, an uncompressed P-256 point.
+     * @param info {Uint8Array} - the application context.
+     * @param aad {Uint8Array} - the associated data.
+     * @param ct {Uint8Array} - the ciphertext with its tag.
+     *
+     * @returns {Promise<{pt: Uint8Array, exporterSecret: Uint8Array}>} the plaintext, and the exporter secret for
+     *          `export`.
+     *
+     * @throws {Error} when the ciphertext does not authenticate under this key pair.
+     */
+    static async openBase(enc, skR, pkRm, info, aad, ct) {
+      const {key, nonce, exporterSecret} = await this.#keySchedule(await this.#ecdh(skR, enc), enc, pkRm, info);
+      const pt = await crypto.subtle.decrypt(
+        {name: 'AES-GCM', iv: /** @type {BufferSource} */ (nonce), additionalData: /** @type {BufferSource} */ (aad)},
+        key, /** @type {BufferSource} */ (ct)
+      );
+
+      return {pt: new Uint8Array(pt), exporterSecret};
+    }
+
+    /**
+     * HPKE secret export (RFC 9180, section 5.3). It derives a secret from the encryption context of one message. The
+     * sender and the recipient get the same value without sending it. Each `exporterContext` gives a different secret,
+     * and an exported secret does not reveal the AES key or the nonce.
+     *
+     * @param exporterSecret {Uint8Array} - the exporter secret of the context, from `sealBase` or `openBase`.
+     * @param exporterContext {Uint8Array} - the label of the exported secret.
+     * @param length {number} - the length in bytes, from 1 to 32.
+     *
+     * @returns {Promise<Uint8Array>} the exported secret.
+     *
+     * @throws {RangeError} when the length is not from 1 to 32.
+     */
+    static async export(exporterSecret, exporterContext, length) {
+      if (!Number.isInteger(length) || length < 1 || length > 32) {
+        throw new RangeError('Invalid export length');
+      }
+
+      // LabeledExpand(exporter_secret, "sec", exporter_context, L). Up to 32 bytes, HKDF-Expand is one block,
+      // HMAC(exporter_secret, info || 0x01) (RFC 5869, section 2.3). Web Crypto's HKDF always runs Extract first.
+      const labeledInfo = this.#concat(Uint8Array.of(0x00, length), HPKE_V1, SUITE_ID, Helpers.stringToUtf8Bytes('sec'), exporterContext, Uint8Array.of(0x01));
+      return (await Helpers.hmacSha256(exporterSecret, labeledInfo)).slice(0, length);
+    }
+
+    /**
+     * P-256 Diffie-Hellman, the DH() function of the DHKEM (RFC 9180, section 4.1). Its result is the x-coordinate of
+     * the shared point, 32 bytes. The public key must be an uncompressed point (RFC 9180, section 7.1.1). The Web Crypto
+     * import rejects a point that is not on the curve, as RFC 9180, section 7.1.4 requires.
+     *
+     * @param privateKey {CryptoKey} - this side's private key, the sender's one-time key or the recipient's key.
+     * @param publicKeyBytes {Uint8Array} - the other side's public key, an uncompressed P-256 point of 65 bytes.
+     *
+     * @returns {Promise<Uint8Array>} the 32-byte Diffie-Hellman shared secret.
+     *
+     * @throws {Error} when the public key is not an uncompressed point on the P-256 curve.
+     */
+    static async #ecdh(privateKey, publicKeyBytes) {
+      if (publicKeyBytes.length !== 65 || publicKeyBytes[0] !== 0x04) {
+        throw new TypeError('Invalid public key');
+      }
+
+      const publicKey = await crypto.subtle.importKey('raw', /** @type {BufferSource} */ (publicKeyBytes), P256, false, []);
+      return new Uint8Array(await crypto.subtle.deriveBits({name: 'ECDH', public: publicKey}, privateKey, 256));
+    }
+
+    /**
+     * Derives the AES key, the nonce and the exporter secret for one message. ExtractAndExpand derives the KEM shared
+     * secret from the DH result and both public keys (RFC 9180, section 4.1). KeySchedule then derives the key, the base
+     * nonce and the exporter secret for base mode, with an empty pre-shared key (RFC 9180, section 5.1). One message per
+     * context means sequence number 0, so the nonce is the base nonce itself (RFC 9180, section 5.2).
+     *
+     * @param dh {Uint8Array} - the 32-byte Diffie-Hellman shared secret.
+     * @param enc {Uint8Array} - the sender's one-time public key.
+     * @param pkRm {Uint8Array} - the recipient's public key, an uncompressed P-256 point.
+     * @param info {Uint8Array} - the application context.
+     *
+     * @returns {Promise<{key: CryptoKey, nonce: Uint8Array, exporterSecret: Uint8Array}>} the AES-128-GCM key, the
+     *          12-byte nonce and the 32-byte exporter secret.
+     */
+    static async #keySchedule(dh, enc, pkRm, info) {
+      const sharedSecret = await this.#hkdf(KEM_ID, EMPTY, 'eae_prk', dh, 'shared_secret', this.#concat(enc, pkRm), 32);
+      // mode_base (0x00), then the hashes of the empty PSK ID and of info
+      const context = this.#concat(Uint8Array.of(0x00), await this.#extract('psk_id_hash', EMPTY), await this.#extract('info_hash', info));
+      const key = await this.#hkdf(SUITE_ID, sharedSecret, 'secret', EMPTY, 'key', context, 16);
+
+      return {
+        key: await crypto.subtle.importKey('raw', /** @type {BufferSource} */ (key), 'AES-GCM', false, ['encrypt', 'decrypt']),
+        nonce: await this.#hkdf(SUITE_ID, sharedSecret, 'secret', EMPTY, 'base_nonce', context, 12),
+        exporterSecret: await this.#hkdf(SUITE_ID, sharedSecret, 'secret', EMPTY, 'exp', context, 32)
+      };
+    }
+
+    /**
+     * LabeledExtract followed by LabeledExpand (RFC 9180, section 4). Web Crypto's HKDF runs Extract and then Expand
+     * (RFC 5869), so one call does both. The labeled inputs start with "HPKE-v1", the suite ID and the step's label.
+     * This keeps every derived value apart from the others.
+     *
+     * @param suiteId {Uint8Array} - KEM_ID for the DHKEM step, SUITE_ID for the key schedule.
+     * @param salt {Uint8Array} - the Extract salt. An empty salt acts as 32 zero bytes (RFC 5869, section 2.2).
+     * @param extractLabel {string} - the LabeledExtract label, such as `eae_prk`.
+     * @param ikm {Uint8Array} - the input keying material.
+     * @param expandLabel {string} - the LabeledExpand label, such as `shared_secret`.
+     * @param info {Uint8Array} - the LabeledExpand context.
+     * @param length {number} - the output length in bytes, below 256.
+     *
+     * @returns {Promise<Uint8Array>} the derived bytes.
+     */
+    static async #hkdf(suiteId, salt, extractLabel, ikm, expandLabel, info, length) {
+      const labeledIkm = this.#concat(HPKE_V1, suiteId, Helpers.stringToUtf8Bytes(extractLabel), ikm);
+      const labeledInfo = this.#concat(Uint8Array.of(0x00, length), HPKE_V1, suiteId, Helpers.stringToUtf8Bytes(expandLabel), info);
+      const hkdfKey = await crypto.subtle.importKey('raw', /** @type {BufferSource} */ (labeledIkm), 'HKDF', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits(
+        {name: 'HKDF', hash: 'SHA-256', salt: /** @type {BufferSource} */ (salt), info: /** @type {BufferSource} */ (labeledInfo)},
+        hkdfKey, length * 8
+      );
+
+      return new Uint8Array(bits);
+    }
+
+    /**
+     * LabeledExtract with an empty salt (RFC 9180, section 4), for `psk_id_hash` and `info_hash`. RFC 5869 sets a
+     * missing salt to 32 zero bytes for SHA-256. HMAC under 32 zero bytes gives the same result as HMAC under an empty
+     * key, which Web Crypto refuses.
+     *
+     * @param label {string} - the label, `psk_id_hash` or `info_hash`.
+     * @param ikm {Uint8Array} - the input keying material.
+     *
+     * @returns {Promise<Uint8Array>} the 32-byte pseudorandom key.
+     */
+    static async #extract(label, ikm) {
+      return Helpers.hmacSha256(new Uint8Array(32), this.#concat(HPKE_V1, SUITE_ID, Helpers.stringToUtf8Bytes(label), ikm));
+    }
+
+    /**
+     * Joins byte strings in order, the concat() of RFC 9180.
+     *
+     * @param parts {...Uint8Array} - the byte strings.
+     *
+     * @returns {Uint8Array} the joined bytes.
+     */
+    static #concat(...parts) {
+      const rv = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+      let offset = 0;
+
+      for (const part of parts) {
+        rv.set(part, offset);
+        offset += part.length;
+      }
+
+      return rv;
+    }
+  }
+
+  // The HKDF `info` of the request key
+  const REQUEST_KEY_INFO = Helpers.stringToUtf8Bytes('triauth/request/v1');
+
+  /**
+   * Seals and opens the requests that follow a sign-in (ping, sign, stamp and attest), so that the redirect URL and
+   * the browser history show no identifier and no message.
+   *
+   * The client application seals the challenge with AES-128-GCM, under a request key that HKDF-SHA256 (RFC 5869)
+   * derives from the session key of the sign-in. The request also contains `skid`, a short hash of the session key,
+   * so that the authenticator can find the key. Only the client application and the authenticator know the session
+   * key, so a request that opens also proves where it comes from.
+   *
+   * A sealed request is `<iv>.<ciphertext>`, both base64url. The plaintext is the JSON of the challenge.
+   *
+   * @class
+   * @memberof Triauth
+   */
+  class RequestCipher {
+
+    /**
+     * Computes the session key ID, which the request contains readable so that the authenticator can find the key.
+     * It is the first 16 bytes of the SHA-256 of the 32 bytes of the session key.
+     *
+     * @param sessionKey {string} - the session key, 43 base64url characters, without the domain of a delegated key.
+     *
+     * @returns {Promise<string>} the session key ID, 22 base64url characters.
+     */
+    static async skid(sessionKey) {
+      const digest = await crypto.subtle.digest('SHA-256', /** @type {BufferSource} */ (Helpers.base64UrlToUint8(sessionKey)));
+      return Helpers.arrayBufferToBase64Url(new Uint8Array(digest).subarray(0, 16));
+    }
+
+    /**
+     * Seals a challenge under the session key. This is the client application's side.
+     *
+     * @param sessionKey {string} - the session key, 43 base64url characters, without the domain of a delegated key.
+     * @param challenge {string} - the challenge, base64url.
+     *
+     * @returns {Promise<string>} the sealed request, `<iv>.<ciphertext>`.
+     */
+    static async seal(sessionKey, challenge) {
+      // The IV comes from Web Crypto and never from `randomSource`. A repeated IV under one key breaks AES-GCM.
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt(
+        {name: 'AES-GCM', iv}, await this.#requestKey(sessionKey, 'encrypt'), /** @type {BufferSource} */ (Helpers.base64UrlToUint8(challenge))
+      );
+
+      return Helpers.arrayBufferToBase64Url(iv) + '.' + Helpers.arrayBufferToBase64Url(ct);
+    }
+
+    /**
+     * Opens a sealed request with the session key. This is the authenticator's side.
+     *
+     * @param sessionKey {string} - the session key, 43 base64url characters, without the domain of a delegated key.
+     * @param sealedRequest {string} - the sealed request, `<iv>.<ciphertext>`.
+     *
+     * @returns {Promise<string>} the challenge, base64url.
+     *
+     * @throws {Error} when the sealed request is malformed, or does not open under this session key.
+     */
+    static async open(sessionKey, sealedRequest) {
+      const [iv, ct, rest] = String(sealedRequest).split('.');
+
+      if (rest !== undefined || iv?.length !== 16 || !ct) {
+        throw new TypeError('Malformed sealed request');
+      }
+
+      const pt = await crypto.subtle.decrypt(
+        {name: 'AES-GCM', iv: /** @type {BufferSource} */ (Helpers.base64UrlToUint8(iv))},
+        await this.#requestKey(sessionKey, 'decrypt'), /** @type {BufferSource} */ (Helpers.base64UrlToUint8(ct))
+      );
+
+      return Helpers.arrayBufferToBase64Url(new Uint8Array(pt));
+    }
+
+    /**
+     * Derives the AES-128-GCM request key from the session key with HKDF-SHA256 (RFC 5869). The empty salt acts as 32
+     * zero bytes, and the info label keeps this key apart from any other key of the session.
+     *
+     * @param sessionKey {string} - the session key, 43 base64url characters.
+     * @param usage {KeyUsage} - `encrypt` or `decrypt`.
+     *
+     * @returns {Promise<CryptoKey>} the request key.
+     */
+    static async #requestKey(sessionKey, usage) {
+      const ikm = await crypto.subtle.importKey('raw', /** @type {BufferSource} */ (Helpers.base64UrlToUint8(sessionKey)), 'HKDF', false, ['deriveKey']);
+      return crypto.subtle.deriveKey(
+        {name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: /** @type {BufferSource} */ (REQUEST_KEY_INFO)},
+        ikm, {name: 'AES-GCM', length: 128}, false, [usage]
+      );
+    }
+  }
+
   /**
    * Internal helper that implements the shared 3-step challenge-response flow used by
    * some of the top-level API methods (e.g., `authenticate`).
@@ -4136,21 +4555,24 @@
 
     /**
      * Executes one stage of the challenge-response flow:
-     *  - **Stage 1** (when `identifier`+`callbackUrl` are given, `challenge`/`response` are not): builds a challenge,
-     *    invokes `onChallenge` to let the caller mutate `challenge.data`, then returns `{challenge, redirectUrl}`.
-     *  - **Stage 3** (when `challenge`+`response` are given): parses both, sanity-checks them against optional
-     *    `identifier`/`callbackUrl` constraints, then invokes `onResponse` for per-flow verification.
+     *  - **Stage 1** (when `identifier`+`callbackUrl` are given, `challenge`/`response` are not): builds a challenge
+     *    that carries a fresh encryption key (`ek`), invokes `onChallenge` to let the caller mutate `challenge.data`,
+     *    then returns `{challenge, redirectUrl}`. The returned `challenge` is `<challenge>.<decryptionKey>`.
+     *  - **Stage 3** (when `challenge`+`response` are given): parses both, opens the sealed response with the
+     *    decryption key of the stored challenge, sanity-checks them against optional `identifier`/`callbackUrl`
+     *    constraints, then invokes `onResponse` for per-flow verification.
      *
      * @param type {string} - Flow type: `'auth'`, `'ping'`, `'attest'`, `'sign'`, or `'stamp'`.
-     * @param [options={}] {object} - User-facing options. Stage 1 expects `{identifier, callbackUrl, ext?, token?}`
-     *                                 (`token` is required for every flow except `'auth'`, where it is rejected). Stage 3 expects
+     * @param [options={}] {object} - User-facing options. Stage 1 expects `{identifier, callbackUrl, ext?, sessionKey?}`
+     *                                 (`sessionKey` is required for every flow except `'auth'`, where it is rejected). Stage 3 expects
      *                                 `{challenge, response, identifier?, callbackUrl?}` (the optional ones, if
      *                                 provided, are additionally checked against the values embedded in the challenge).
      * @param [callbacks] {{onChallenge: function, onResponse: function}} -
      *        `onChallenge({challenge})` runs after the `Triauth.Challenge` is built (stage 1), giving the caller
      *        a chance to populate `challenge.data` (e.g., `msg`, `attest`, `attachments`).
-     *        `onResponse({challenge, response})` performs verification (stage 3); must return the per-flow
+     *        `onResponse({challenge, response, sessionKey})` performs verification (stage 3); must return the per-flow
      *        success object, `null` for expired-style failures, or `false` for generic verification failures.
+     *        `sessionKey` is the session key from opening the sealed response (see `ResponseCipher.open`).
      * @param [config={}] {object} - Optional overrides for the global Triauth.config settings.
      *
      * @returns {Promise<{challenge: string, redirectUrl: string}|{error: {code: number, message: string}}|*>}
@@ -4166,10 +4588,10 @@
       try {
 
         // Ensure only recognized options are present to help avoid misspellings.
-        // `token` is only meaningful for token-bearing flows (ping/attest/sign/stamp), not for auth.
+        // `sessionKey` is only meaningful for the flows that follow a sign-in (ping/attest/sign/stamp), not for auth.
         const allowedOptions = ['identifier', 'callbackUrl', 'challenge', 'response', 'ext'];
         if (type !== 'auth') {
-          allowedOptions.push('token');
+          allowedOptions.push('sessionKey');
         }
 
         if (!Helpers.hasOnlyKnownProperties(options, allowedOptions)) {
@@ -4189,7 +4611,7 @@
         const challenge = options.challenge;
         const response = options.response;
         const ext = options.ext;
-        const token = options.token;
+        const sessionKey = options.sessionKey;
 
         // Stage 1 - identifier, callbackUrl, and ext (optional) are provided, and we need to build and return a challenge and redirectUrl
         if (
@@ -4201,16 +4623,16 @@
             Validator.validateIdentifier(identifier).errors[0] ||
             Validator.validateCallbackUrl(callbackUrl).errors[0] ||
             (ext != null && Validator.validateExt(ext).errors[0]) ||
-            (token != null && Validator.validateToken(token).errors[0])
+            (sessionKey != null && Validator.validateSessionKey(sessionKey).errors[0])
           );
 
           if (validationError) {
             throw new TriauthError(validationError.code, validationError.message);
           }
 
-          // Token-gated flows (every flow except `auth`) require a token at issue
-          if (type !== 'auth' && token == null) {
-            throw new TriauthError(226, 'Invalid token');
+          // Every flow that follows a sign-in (all but `auth`) requires the session key of that sign-in
+          if (type !== 'auth' && sessionKey == null) {
+            throw new TriauthError(226, 'Invalid session key');
           }
 
           config.logger?.info?.('Request parameters:', {identifier, callbackUrl, ext});
@@ -4228,6 +4650,11 @@
 
           // Build the authentication request for the given identity with the given options - `callbackUrl` and `ext`.
           const challengeObj = Challenge.build(type, identity, challengeOptions, config);
+
+          // The authenticator seals the response to `ek`. The decryption key stays with the stored challenge.
+          const {encryptionKey, decryptionKey} = await ResponseCipher.generateKeyPair();
+          challengeObj.data.ek = encryptionKey;
+
           await callbacks.onChallenge({challenge: challengeObj});
           const challengeString = challengeObj.toString();
 
@@ -4237,9 +4664,11 @@
             throw new TriauthError(challengeError.code, challengeError.message);
           }
 
-          const authenticationEndpoint = identity.authenticationEndpoint;
+          // A delegated session key is `<domain>:<key>`, and its session is at the authenticator of that domain
+          const [sessionKeyDomain, sessionKeySecret] = sessionKey?.includes(':') ? sessionKey.split(':') : ['', sessionKey];
+          const authenticationEndpoint = sessionKeyDomain ? new AuthenticationEndpoint(sessionKeyDomain, config) : identity.authenticationEndpoint;
 
-          // Check if authentication endpoint has been configured for the given identifier's domain name
+          // Check if authentication endpoint has been configured for the domain name
           if (!(await authenticationEndpoint.resolve())) {
             throw new TriauthError(301, 'Domain is not configured for triauth');
           }
@@ -4247,25 +4676,19 @@
           // Enforce config.requireSecure if set
           ChallengeResponseFlow.assertSecure(authenticationEndpoint.secure, config);
 
-          const redirectUrlParams = {challenge:challengeString};
-
-          // Include the pre-validated token in the request parameters if present
-          if (token) {
-            const [tokenPublicPart] = token.split(':');
-
-            const challengeHMAC = Helpers.arrayBufferToBase64Url(
-              await Helpers.hmacSha256(Helpers.stringToUtf8Bytes(token), Helpers.base64UrlToUint8(challengeString))
-            );
-
-            redirectUrlParams.token = tokenPublicPart + ':' + challengeHMAC;
-          }
+          // A request that follows a sign-in travels sealed under the session key, with `skid` to find the key.
+          // A sign-in has no session key yet, so its challenge travels readable.
+          const redirectUrlParams = sessionKey
+            ? {skid: await RequestCipher.skid(sessionKeySecret), request: await RequestCipher.seal(sessionKeySecret, challengeString)}
+            : {challenge: challengeString};
 
           const redirectUrl = authenticationEndpoint.urlFor(type, redirectUrlParams);
           const redirectUrlString = redirectUrl.toString();
 
-          // Return the challenge that the client should remember, and a redirectUrl to which the user's web browser should be redirected.
+          // Return the challenge that the client should remember (with the key that opens the response), and a redirectUrl
+          // to which the user's web browser should be redirected.
           return Helpers.clone({
-            challenge: challengeString,
+            challenge: challengeString + '.' + decryptionKey,
             redirectUrl: redirectUrlString
           });
 
@@ -4279,9 +4702,13 @@
             throw new TriauthError(403, 'Request has been denied');
           }
 
+          // The stored challenge is `<challenge>.<decryptionKey>`, and the response is sealed to the challenge's `ek`
+          const [challengeString, decryptionKey, rest] = typeof challenge === 'string' ? challenge.split('.') : [];
+
           const validationError = (
-            Validator.validateChallenge(challenge).errors[0] ||
-            Validator.validateResponse(response).errors[0] ||
+            Validator.validateChallenge(challengeString).errors[0] ||
+            ((rest !== undefined || !Helpers.isBase64UrlString(decryptionKey) || decryptionKey.length !== 43) && {code: 223, message: 'Invalid challenge'}) ||
+            Validator.validateSealedResponse(response).errors[0] ||
             (identifier != null && Validator.validateIdentifier(identifier).errors[0]) ||
             (callbackUrl != null && Validator.validateCallbackUrl(callbackUrl).errors[0])
           );
@@ -4296,12 +4723,31 @@
           let challengeObj, responseObj;
 
           try {
-            challengeObj = Challenge.fromString(options.challenge, config);
+            challengeObj = Challenge.fromString(challengeString, config);
           } catch (err) {
             throw new TriauthError(223, 'Invalid challenge', {cause:err});
           }
 
-          responseObj = new Response(response, config);
+          // Every challenge carries the encryption key that its response is sealed to
+          const encryptionKey = challengeObj.data.ek;
+          if (!Helpers.isBase64UrlString(encryptionKey) || encryptionKey.length !== 87) {
+            throw new TriauthError(223, 'Invalid challenge');
+          }
+
+          let envelope, sessionKey;
+
+          try {
+            ({response: envelope, sessionKey} = await ResponseCipher.open(encryptionKey, decryptionKey, response));
+          } catch (err) {
+            throw new TriauthError(224, 'Invalid response', {cause:err});
+          }
+
+          const responseError = Validator.validateResponse(envelope).errors[0];
+          if (responseError) {
+            throw new TriauthError(responseError.code, responseError.message);
+          }
+
+          responseObj = new Response(envelope, config);
 
           // Make sure the challenge's type matches the flow type, and (if again passed in options)
           // that the identifier and/or callbackUrl matches the one embedded in the challenge.
@@ -4313,7 +4759,7 @@
             throw new TriauthError(401, 'Your identity could not be verified');
           }
 
-          const retval = await callbacks.onResponse({challenge:challengeObj, response:responseObj});
+          const retval = await callbacks.onResponse({challenge:challengeObj, response:responseObj, sessionKey});
 
           if (retval) {
             // Enforce config.requireSecure if set
@@ -4457,8 +4903,8 @@
    *   }
    * );
    * // {
-   * //   challenge: 'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJhdXRoIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJTSWRJaXZRRTVJbkhHQmFUWGhDb0UxMG8iLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MX0',
-   * //   redirectUrl: 'https://auth.triauthdemo.org/auth.html#?challenge=eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJhdXRoIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJTSWRJaXZRRTVJbkhHQmFUWGhDb0UxMG8iLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MX0'
+   * //   challenge: 'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJhdXRoIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJTSWRJaXZRRTVJbkhHQmFUWGhDb0UxMG8iLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MSwiZWsiOiJCQXZJbDlWVDJ3Z3JoS2FBMmw3MTFhWmIxSVJlWURkX0UtdVRfcDl2VnNzZndqWG5VWjVNcVhjRTNmSUNCRlpmOElFeXJoUXVmX0F0ODlSaHBZMFlScUUifQ.-rkB18wDNcYxPU7jK3Lb8nwmQcV-fhJ-1nLCxdDgEzE',
+   * //   redirectUrl: 'https://auth.triauthdemo.org/auth.html#?challenge=eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJhdXRoIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJTSWRJaXZRRTVJbkhHQmFUWGhDb0UxMG8iLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MSwiZWsiOiJCQXZJbDlWVDJ3Z3JoS2FBMmw3MTFhWmIxSVJlWURkX0UtdVRfcDl2VnNzZndqWG5VWjVNcVhjRTNmSUNCRlpmOElFeXJoUXVmX0F0ODlSaHBZMFlScUUifQ'
    * // }
    * ```
    *
@@ -4467,13 +4913,13 @@
    * Once the user's web browser is redirected to the `redirectUrl`, they will be taken to the Triauth Authenticator web application, where they can approve or reject the authentication request.
    *
    * If the user approves the authentication request, Triauth Authenticator signs the challenge using one or more private keys that are available to it, and for which matching public keys may be obtained from the identity records, associated with the user's `identifier`, stored in the DNS.
-   * It then redirects the web browser to the `callbackUrl` using a `HTTP POST` method and passes the signature, together with optional additional data, inside the `response` form parameter.
+   * It then redirects the web browser to the `callbackUrl`, by default using a `HTTP GET` method, and passes the signature, together with optional additional data, inside the `response` URL parameter.
    *
    * If the user declines the authentication request, the Triauth Authenticator sends `false` as the `response`, which `Triauth.authenticate` reports as error 403.
    *
    * **3. Verify**
    *
-   * After the user approves the authentication request, Triauth Authenticator sends a [HTTP POST request](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/POST) to the previously provided `callbackUrl`, and passes a response in the `response` form parameter.
+   * After the user approves the authentication request, Triauth Authenticator redirects the web browser to the previously provided `callbackUrl`, by default through the [HTTP GET method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/GET), and passes a response in the `response` URL parameter.
    * The callback method that is used to pass the response to the client application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.authenticate` function together with the previously stored `challenge` (string) to obtain authentication result.
@@ -4489,7 +4935,7 @@
    * ```javascript
    *
    * let authenticationResult = await Triauth.authenticate({challenge, response});
-   * // returns {authenticated:true, issuedAt, signedAt, verifiedAt, expires, secure, identifier, identityDomain, lookupCode, actor, actorIdentityDomain, actorLookupCode, publicProfile, groups, keys, deviceName, deviceTag, ext} upon successful authentication
+   * // returns {authenticated:true, issuedAt, signedAt, verifiedAt, expires, secure, identifier, identityDomain, lookupCode, actor, actorIdentityDomain, actorLookupCode, publicProfile, groups, keys, deviceName, deviceTag, sessionKey, ext} upon successful authentication
    * // returns {error:{code, message}} upon failed authentication
    *
    * ```
@@ -4499,8 +4945,8 @@
    * ```javascript
    * await Triauth.authenticate(
    *   {
-   *    challenge:'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJhdXRoIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJTSWRJaXZRRTVJbkhHQmFUWGhDb0UxMG8iLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MX0',
-   *    response:'|auth;john@triauthdemo.org;;https://example.com/;v1;1787224766683;;;S8lEY3KOYs9gsSpCJ8YnbnKHVCJcT0dXRREZCAgfIR_3dqkW3S9eUcfQZc6q2HD2sy56LwndOoSbcGyO2ZbUnw|'
+   *    challenge:'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJhdXRoIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJTSWRJaXZRRTVJbkhHQmFUWGhDb0UxMG8iLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MSwiZWsiOiJCQXZJbDlWVDJ3Z3JoS2FBMmw3MTFhWmIxSVJlWURkX0UtdVRfcDl2VnNzZndqWG5VWjVNcVhjRTNmSUNCRlpmOElFeXJoUXVmX0F0ODlSaHBZMFlScUUifQ.-rkB18wDNcYxPU7jK3Lb8nwmQcV-fhJ-1nLCxdDgEzE',
+   *    response:'BNh1cQjNAGfM2AT7Kee_wcSpCMPmf393GaP5h1bOOFgrH58q9CIgGz0ChLLBzLGOUGbZB46FIgY8CPljfgKTNj4.DJguMmSAhafOTygveRsBQlHfpOcc4haXughtMSANoZO3ra2IIpYviH6H4ErvaqeRb_bEBu2e0URsJUjsA4iJ1Fu_2MMnn80zA-slH6XIsReM6i7m7a74iU_hmDmUMaL6KkwDM_LVJQw71pR1qnSLEE9EWOHHe8sqOT8t42S4TX0fhmzZFrlPm969B2eopvMFvJ0HMQ0I1USB6XB-lT0arzJt9UQB6XKsi2Dm'
    *   }
    * );
    * //
@@ -4535,6 +4981,7 @@
    * //       "skipped": false
    * //     }
    * //   ],
+   * //   "sessionKey": "59cKjF500rMz1OrAMqUyLhSbWx1RgJDsWL7dFBDYIP8",
    * //   "ext": {}
    * // }
    * //
@@ -4551,20 +4998,20 @@
    *
    * @param [options.identifier] {string} - (stage 1) the user provided identifier that is being authenticated
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
-   * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{signToken:true}`)
+   * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{permissions:{ping:true}}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
-   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` form parameter of a POST to the `callbackUrl` (overridable via the `callbackMethod` extension)
+   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` URL parameter of a GET to the `callbackUrl` (overridable via the `callbackMethod` extension)
    *
    * @param [config={}] {object} - Optional overrides for the global Triauth.config settings
    *
    * @returns {Promise<
    *     {challenge: string, redirectUrl: string}
-   *   | {authenticated: true, issuedAt: number, signedAt: number, verifiedAt: number, expires: (number|undefined), secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, publicProfile: object, groups: Array<string>, deviceName: string, deviceTag: string, keys: Array<object>, ext: object}
+   *   | {authenticated: true, issuedAt: number, signedAt: number, verifiedAt: number, expires: (number|undefined), secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, publicProfile: object, groups: Array<string>, deviceName: string, deviceTag: string, keys: Array<object>, sessionKey: string, ext: object}
    *   | {error: {code: number, message: string}}
    * >} A promise that resolves to one of the following:
    * - `{challenge: string, redirectUrl: string}`: Returned during stage 1 when a challenge is generated. The `challenge` should be stored and the user should be redirected to the `redirectUrl`.
-   * - `{authenticated: true, issuedAt: number, signedAt: number, verifiedAt: number, expires?: number, secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, publicProfile: object, groups: Array<string>, deviceName: string, deviceTag: string, keys: Array<object>, ext: object}`: Returned during stage 3 upon successful authentication. Includes:
+   * - `{authenticated: true, issuedAt: number, signedAt: number, verifiedAt: number, expires?: number, secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, publicProfile: object, groups: Array<string>, deviceName: string, deviceTag: string, keys: Array<object>, sessionKey: string, ext: object}`: Returned during stage 3 upon successful authentication. Includes:
    *   - `authenticated` (true): Indicates authentication was successful.
    *   - `issuedAt` (number): Unix timestamp on **your** server's clock at which you issued the challenge in stage 1 — the start of the flow's timeline.
    *   - `signedAt` (number): Unix timestamp on the **user's device** clock at which the authenticator signed the response. Verified to fall within the freshness window, but device-asserted — do not treat it as a trusted wall clock; prefer `issuedAt`/`verifiedAt` for authoritative timing.
@@ -4582,6 +5029,7 @@
    *   - `deviceName` (string): User-given, public name of the device that was used for authentication, as read from the DNS key records (e.g., `"mylaptop"`).
    *   - `deviceTag` (string): Unique identifier of the device (and, for delegated authentication, the delegation) used; under `mode=private` it also carries the lookup code. Store it verbatim and pass it to `Triauth.check`.
    *   - `keys` (array): Public keys that were considered and/or used during verification.
+   *   - `sessionKey` (string): A secret of this sign-in, in 43 base64url characters, that only your application and the user's authenticator know. Pass it to `Triauth.ping`, `Triauth.sign`, `Triauth.stamp` and `Triauth.attest`. Store it with the user's server-side or encrypted session, and keep it out of logs. After a delegated sign-in, it starts with the actor's domain and a colon.
    *   - `ext` (object): Data returned by the authenticator application for the requested protocol extensions. Always present - `{}` when no extension data was returned (a malformed `ext` is discarded with a logged warning and also yields `{}`).
    * - `{error: {code: number, message: string}}`: Returned during stage 1 or stage 3 when authentication fails, includes an error object with code and message.
    */
@@ -4592,7 +5040,7 @@
     // No challenge processing needed here
     const onChallenge = async () => {};
 
-    const onResponse = async ({challenge, response}) => {
+    const onResponse = async ({challenge, response, sessionKey}) => {
 
       // Verify the response against the challenge
       const result = await ChallengeResponseFlow.verifyChallengeResponse('auth', challenge.challengeString, challenge, response, config.authTimeout, config);
@@ -4634,6 +5082,7 @@
         deviceName: sig.deviceName,
         deviceTag: sig.deviceTag,
         keys: sig.keys,
+        sessionKey: sig.actor ? sig.actor.split('@')[1] + ':' + sessionKey : sessionKey, // A delegated session is at the authenticator of the actor's domain, so its key starts with that domain
         ext: receivedExtValid ? receivedExt : {}
       });
     };
@@ -4833,12 +5282,9 @@
    * Pings typically do not require any interaction from the user, and may be used as one of the signals in Continuous Authentication schemes.
    *
    * > [!NOTE]
-   * > **To use this function you must request and obtain a special `pingToken`**<br/>
-   * > To do so, provide the `ext:{pingToken:true}` parameter to the `Triauth.authenticate` function during the initial call (i.e., when building the challenge),
-   * > and in the authentication result you will receive `ext.pingToken` property (string).
-   * > You should keep the `pingToken` value private, and pass it as a `token` parameter in the initial call to the `ping` method.
-   * > The token is issued by the authenticator on the device that signed in, and only that device honors it.
-   * > A user with several devices holds a different token on each.
+   * > **Get the `ping` permission and use the same base callbackUrl as for authentication**<br/>
+   * > To get the permission, provide the `ext:{permissions:{ping:true}}` parameter to the `Triauth.authenticate` function during the initial call (i.e., when building the challenge).
+   * > The authentication result shows the decision in `ext.permissions`. You can call `ping` only when `ext.permissions?.ping === true` in the result.
    * >
    * > Also, the `callbackUrl` used in this method must have the **same base URL** (its origin plus the path up to and including the last `/`) as the `callbackUrl` from the initial `Triauth.authenticate` call.
    * > For example, if `callbackUrl` used for authentication was `https://example.com/dir1/callback`, the `callbackUrl` used in this method
@@ -4850,7 +5296,7 @@
    *
    * At first, you need to call the `Triauth.ping` method with the `identifier` option set to the user provided personal identifier (lowercase string),
    * a `callbackUrl` option set to the URL under which your application expects to receive a response (string),
-   * a `token` (string) option set to the `pingToken` previously obtained via `ext.pingToken` from a `Triauth.authenticate` call,
+   * a `sessionKey` (string) option set to the `sessionKey` of a `Triauth.authenticate` result,
    * and an optional `ext` option (object) listing the [protocol extensions](#protocol-extensions) that you wish to use.
    *
    * In return, you will receive an object with the `challenge` (string) and `redirectUrl` (string).
@@ -4860,7 +5306,7 @@
    *
    * ```javascript
    *
-   * let result = await Triauth.ping({identifier, callbackUrl, token, ext});
+   * let result = await Triauth.ping({identifier, callbackUrl, sessionKey, ext});
    * // returns {challenge, redirectUrl} the challenge should be remembered, and user redirected to the redirectUrl
    * // returns {error} on error
    *
@@ -4874,24 +5320,24 @@
    *   {
    *     identifier:'john@triauthdemo.org',
    *     callbackUrl:'https://example.com/callback',
-   *     token:':SvUj6xL4PhtYnNEboKbJ85WW'
+   *     sessionKey:'59cKjF500rMz1OrAMqUyLhSbWx1RgJDsWL7dFBDYIP8'
    *   }
    * );
    * //
    * // {
-   * //   challenge: 'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vY2FsbGJhY2siLCJ0eXBlIjoicGluZyIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoicWFvU1JnZlVnREpwZG5LX1FnQTd4SG9ZIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjF9',
-   * //   redirectUrl: 'https://auth.triauthdemo.org/ping.html#?challenge=eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vY2FsbGJhY2siLCJ0eXBlIjoicGluZyIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoicWFvU1JnZlVnREpwZG5LX1FnQTd4SG9ZIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjF9&token=:DFB4aHZqJ6zpbq8QVqQfTM4rsCkuCuyBqokCaImZelE'
+   * //   challenge: 'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vY2FsbGJhY2siLCJ0eXBlIjoicGluZyIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoicWFvU1JnZlVnREpwZG5LX1FnQTd4SG9ZIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjEsImVrIjoiQkVoLTJGR0JOUkUyUGZvSTVsWjh4eU9KX2IzaTlaRVFadGtQOGJVajJ6VWljWDdsaTdqalBvYzVmUnczUlZKb2tjb1BZdVRLdGdGaVVENlR1LURrM3I0In0.urITupCNu0ZNV4CF692qaZs6UaBb5LNov-Z9hhB5ArU',
+   * //   redirectUrl: 'https://auth.triauthdemo.org/ping.html#?skid=wzI1sz3n1R4biw4FL_VJ3Q&request=aTO6cylS_52etdEH.hAskvAG-kqxradXNXvr3S4yxpgI3c6EdBOWOnN3UP4CjEfhkyQ1vbcYTmYQ_L3UOtIm6VwPYczazFTW7G7mXByWzAITIVkTRaQHlwyOj9CkPiOP278pc8pQdjPsCKmVHEPSqfwYlnUvNOOp_dsVRgb1zKT2QEkWFnCAH1CUvxDb4bpYqQ_YFa-q48WjkC9cDXRSKRgpN51iwPGV-koSmoIwgYLghNpUC4Cvx72ctYq1tLyP6jrXa3dS8VrSZgy5D4EFwYx22VHg1LloHgDc730QN560wpD7yGL8ylk0eENLml357QTLextpeqZ4Q_MG6JEg0fsN1XdNduNlsiQd_GfTiVwLnaXh3'
    * // }
    * //
    * ```
    *
    * **2. Redirect**
    *
-   * Once the user's web browser is redirected to the `redirectUrl`, and assuming that the `token` is valid, the Triauth Authenticator web application will immediately respond to the `callbackUrl`.
+   * Once the user's web browser is redirected to the `redirectUrl`, the Triauth Authenticator web application immediately responds to the `callbackUrl`. This needs a valid session key with the `ping` permission.
    *
    * **3. Verify**
    *
-   * The Triauth Authenticator application redirects the user's web browser to the previously provided `callbackUrl`, by default through the [HTTP POST method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/POST), and passes a fresh signature in the `response` form parameter.
+   * The Triauth Authenticator application redirects the user's web browser to the previously provided `callbackUrl`, by default through the [HTTP GET method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/GET), and passes a fresh signature in the `response` URL parameter.
    * The method that is used to pass the response to your application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.ping` function together with the previously stored `challenge` (string) to obtain ping result.
@@ -4917,8 +5363,8 @@
    * ```javascript
    * await Triauth.ping(
    *   {
-   *    challenge:'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vY2FsbGJhY2siLCJ0eXBlIjoicGluZyIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoicWFvU1JnZlVnREpwZG5LX1FnQTd4SG9ZIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjF9',
-   *    response:'|ping;john@triauthdemo.org;;https://example.com/;v1;1787224751161;;;KalL2ivLz--0voQXL-jBp58650Hj1PIUpe8W4Nfps0HnRdlXMFu6wDUCssE_dr6_BrKRtT508BRXe3228yiA_A|'
+   *    challenge:'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vY2FsbGJhY2siLCJ0eXBlIjoicGluZyIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoicWFvU1JnZlVnREpwZG5LX1FnQTd4SG9ZIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjEsImVrIjoiQkVoLTJGR0JOUkUyUGZvSTVsWjh4eU9KX2IzaTlaRVFadGtQOGJVajJ6VWljWDdsaTdqalBvYzVmUnczUlZKb2tjb1BZdVRLdGdGaVVENlR1LURrM3I0In0.urITupCNu0ZNV4CF692qaZs6UaBb5LNov-Z9hhB5ArU',
+   *    response:'BGb9tY40nX1dXVl8KlCg8c6mSThXTM2UPWvkN_tHT8h05FIbypseeOplJNXLRH3mVtiTT4YarHDUVT5OqmHziOc.AV7MibGdeVKtc2hBh9BfpeB48dxc1xwu1bv2LtfvmHNEXUf_J_g0j3Njndh-_wiUI2sF2s_b8g9WJe5SewgFblFvdKIz6rXNL6SeCZsQeZhIvNSAvMtXgAHJtybBU5MmQJhx0zqh0Rf7Osuju8bceqMHFzuY9083btLzpU6iCbJeKGXqnwAMyCVOOwCDkJgCVRE_Mb2wADTsFpIUiQAQX-k6q0qAaBbZ1bec'
    *   }
    * );
    *
@@ -4969,11 +5415,11 @@
    *
    * @param [options.identifier] {string} - (stage 1) the user provided identifier
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
-   * @param [options.token] {string} - (stage 1, required) the `pingToken` previously obtained via `ext.pingToken` from a `Triauth.authenticate` call; a stage-1 request without it returns error 226
+   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result whose `ext.permissions.ping` is `true`; a stage-1 request without a valid session key returns error 226
    * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{callbackMethod:'GET'}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
-   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` form parameter of a POST to the `callbackUrl` (overridable via the `callbackMethod` extension)
+   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` URL parameter of a GET to the `callbackUrl` (overridable via the `callbackMethod` extension)
    *
    * @param [config={}] {object} - Optional overrides for the global Triauth.config settings
    *
@@ -5075,14 +5521,8 @@
    * > An attester that binds nothing attests anonymously (the default); the binders it did state are surfaced under `attestations.<id>.signedMetadata.bind`, so you can require their presence.
    *
    * > [!NOTE]
-   * > **To use this function you must request and obtain a special `attestToken`**<br/>
-   * > To do so, provide the `ext:{attestToken:true}` parameter to the `Triauth.authenticate` function during the initial call (i.e., when building the challenge),
-   * > and, given that the user agrees and/or authenticator supports it, in the authentication result you will receive `ext.attestToken` property (string).
-   * > You should keep the `attestToken` value private, and pass it as a `token` parameter in the initial call to the `attest` method.
-   * > The token is issued by the authenticator on the device that signed in, and only that device honors it.
-   * > A user with several devices holds a different token on each.
-   * >
-   * > Also, the `callbackUrl` used in this method must have the **same base URL** (its origin plus the path up to and including the last `/`) as the `callbackUrl` from the initial `Triauth.authenticate` call.
+   * > **Use the same base callbackUrl as for authentication**<br/>
+   * > The `callbackUrl` used in this method must have the **same base URL** (its origin plus the path up to and including the last `/`) as the `callbackUrl` from the initial `Triauth.authenticate` call.
    * > For example, if `callbackUrl` used for authentication was `https://example.com/dir1/callback`, the `callbackUrl` used in this method
    * > must sit in that same `https://example.com/dir1/` base directory — only the final path segment may differ, e.g., `https://example.com/dir1/this-callback` (a deeper path such as `https://example.com/dir1/dir2/this-callback` does **not** match the base URL, and the request will be rejected).
    *
@@ -5093,7 +5533,7 @@
    * At first, you need to call the `Triauth.attest` method with the `identifier` option set to the user provided personal identifier (lowercase string),
    * a `callbackUrl` option set to the URL under which your application expects to receive a response (string),
    * an `attestations` option (object) whose keys are caller-chosen attestation IDs and whose values consist of a `label` (string) and `providers` (array of `https://` URL strings),
-   * a `token` (string) option set to the `attestToken` previously obtained via `ext.attestToken` from a `Triauth.authenticate` call,
+   * a `sessionKey` (string) option set to the `sessionKey` of a `Triauth.authenticate` result,
    * and an optional `ext` option (object) listing the [protocol extensions](#protocol-extensions) that you wish to use.
    *
    * In return, you will receive an object with the `challenge` (string) and `redirectUrl` (string).
@@ -5103,7 +5543,7 @@
    *
    * ```javascript
    *
-   * let result = await Triauth.attest({identifier, callbackUrl, attestations, token, ext});
+   * let result = await Triauth.attest({identifier, callbackUrl, attestations, sessionKey, ext});
    * // returns {challenge, redirectUrl} the challenge should be remembered, and user redirected to the redirectUrl
    * // returns {error} on error
    *
@@ -5125,10 +5565,10 @@
    *         ]
    *       }
    *     },
-   *     token: ':tgX6ZXfNi3xwzSwuennigDoA'
+   *     sessionKey: '59cKjF500rMz1OrAMqUyLhSbWx1RgJDsWL7dFBDYIP8'
    *   }
    * );
-   * // {challenge: 'eyJjYn…JdfX19', redirectUrl: 'https://auth.triauthdemo.org/attest.html#?challenge=eyJjYn…JdfX19&token=:WE4zaN5WA_NuHX1BW4wBidu_Sef2aqkzA-gOxlyLmeE'}
+   * // {challenge: 'eyJjYn…l19fX0.PEq5CslSnTExe9xko1O5B-K9T4wBse5XtyClYb8WxJM', redirectUrl: 'https://auth.triauthdemo.org/attest.html#?skid=wzI1sz3n1R4biw4FL_VJ3Q&request=…'}
    * ```
    *
    * **2. Redirect**
@@ -5143,7 +5583,7 @@
    *
    * **3. Verify**
    *
-   * The Triauth Authenticator application redirects the user's web browser to the previously provided `callbackUrl`, by default through the [HTTP POST method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/POST), and passes the attestation in the `response` form parameter.
+   * The Triauth Authenticator application redirects the user's web browser to the previously provided `callbackUrl`, by default through the [HTTP GET method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/GET), and passes the attestation in the `response` URL parameter.
    * The method that is used to pass the response to your application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.attest` function together with the previously stored `challenge` (string) to obtain attestation result.
@@ -5164,8 +5604,8 @@
    * ```javascript
    * await Triauth.attest(
    *   {
-   *    challenge:'eyJjYn…JdfX19',
-   *    response:'|attest;john@triauthdemo.org;;https://example.com/;v1;1787224773556;;;MsVdr13VwgivjiTRnp78ncX2skDvZf5MdWLqXTXrMmo0VUtmn6R7gx1qJVhLJGYojMh9C4Lj2b_wxtbFlaZltg|attest;robot-attester@attest.triauthdemo.org;;https://attest.triauthdemo.org/not-a-robot;v1;1787224768930;;;AvbmMJwAcE0B_EaBv0EdMAcBAwJVY0BpN1MOmARhc_LdS6QsQzgwSNUaahjL_UyA8qXoiEqqtDXrlkG_1fWBpg|'
+   *    challenge:'eyJjYn…l19fX0.PEq5CslSnTExe9xko1O5B-K9T4wBse5XtyClYb8WxJM',
+   *    response:'BPPDsY…OGSBac'
    *   }
    * );
    *
@@ -5253,11 +5693,11 @@
    * @param [options.identifier] {string} - (stage 1) the user provided identifier
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
    * @param [options.attestations] {object} - (stage 1) an object whose keys are caller-chosen attestation IDs and whose values are `{label, providers}` objects describing each requested attestation; at most 4 attestations, each listing at most 4 `https://` provider URLs (error 229 otherwise)
-   * @param [options.token] {string} - (stage 1, required) the `attestToken` previously obtained via `ext.attestToken` from a `Triauth.authenticate` call; a stage-1 request without it returns error 226
+   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result; a stage-1 request without a valid session key returns error 226
    * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{callbackMethod:'GET'}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
-   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` form parameter of a POST to the `callbackUrl` (overridable via the `callbackMethod` extension)
+   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` URL parameter of a GET to the `callbackUrl` (overridable via the `callbackMethod` extension)
    *
    * @param [config={}] {object} - Optional overrides for the global Triauth.config settings
    *
@@ -5810,14 +6250,8 @@
    * > inside the `message` itself and reject reused nonces.
    *
    * > [!NOTE]
-   * > **To use this function you must request and obtain a special `signToken`**<br/>
-   * > To do so, provide the `ext:{signToken:true}` parameter to the `Triauth.authenticate` function during the initial call (i.e., when building the challenge),
-   * > and, given that the user agrees and/or authenticator supports it, in the authentication result you will receive `ext.signToken` property (string).
-   * > You should keep the `signToken` value private, and pass it as a `token` parameter in the initial call to the `sign` method.
-   * > The token is issued by the authenticator on the device that signed in, and only that device honors it.
-   * > A user with several devices holds a different token on each.
-   * >
-   * > Also, the `callbackUrl` used in this method must have the **same base URL** (its origin plus the path up to and including the last `/`) as the `callbackUrl` from the initial `Triauth.authenticate` call.
+   * > **Use the same base callbackUrl as for authentication**<br/>
+   * > The `callbackUrl` used in this method must have the **same base URL** (its origin plus the path up to and including the last `/`) as the `callbackUrl` from the initial `Triauth.authenticate` call.
    * > For example, if `callbackUrl` used for authentication was `https://example.com/dir1/callback`, the `callbackUrl` used in this method
    * > must sit in that same `https://example.com/dir1/` base directory — only the final path segment may differ, e.g., `https://example.com/dir1/this-callback` (a deeper path such as `https://example.com/dir1/dir2/this-callback` does **not** match the base URL, and the request will be rejected).
    *
@@ -5829,7 +6263,7 @@
    * a `callbackUrl` option set to the URL under which your application expects to receive a response (string),
    * a `message` (string) option set to a human-readable text message to be signed,
    * an optional `attachments` (array) option listing additional file attachments to be covered by the signature,
-   * a `token` (string) option set to the `signToken` previously obtained via `ext.signToken` from a `Triauth.authenticate` call,
+   * a `sessionKey` (string) option set to the `sessionKey` of a `Triauth.authenticate` result,
    * and an optional `ext` option (object) listing the [protocol extensions](#protocol-extensions) that you wish to use.
    *
    * > [!NOTE]
@@ -5858,7 +6292,7 @@
    *
    * ```javascript
    *
-   * let result = await Triauth.sign({identifier, callbackUrl, message, attachments, token, ext});
+   * let result = await Triauth.sign({identifier, callbackUrl, message, attachments, sessionKey, ext});
    * // returns {challenge, redirectUrl} the challenge should be remembered, and user redirected to the redirectUrl
    * // returns {error} on error
    *
@@ -5879,12 +6313,12 @@
    *         sha256: 'd8a6cc31abc16b6748c7a21f21611f5a1ec33f67d22ca23d7da1c19b95496bee'
    *       }
    *     ],
-   *     token: ':icP7sOAmpY_W1ODqjLgG6y-G'
+   *     sessionKey: '59cKjF500rMz1OrAMqUyLhSbWx1RgJDsWL7dFBDYIP8'
    *   }
    * );
    * // {
-   * //   "challenge": "eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzaWduIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJLRXZCSVBLZFRLX1JNYldFUkZVVFpBcUkiLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MSwibXNnIjoiVG8gY29udGludWUsIHBsZWFzZSByZWFkIGFuZCBhY2NlcHQgdGhlIGF0dGFjaGVkIExpY2Vuc2UiLCJhdHRhY2htZW50cyI6W3sibmFtZSI6IkxpY2Vuc2UiLCJzb3VyY2VVcmwiOiJodHRwczovL3Jhdy5naXRodWJ1c2VyY29udGVudC5jb20vc3BkeC9saWNlbnNlLWxpc3QtZGF0YS9yZWZzL2hlYWRzL21haW4vdGV4dC9BR1BMLTMuMC1vci1sYXRlci50eHQiLCJzaGEyNTYiOiJkOGE2Y2MzMWFiYzE2YjY3NDhjN2EyMWYyMTYxMWY1YTFlYzMzZjY3ZDIyY2EyM2Q3ZGExYzE5Yjk1NDk2YmVlIn1dfQ",
-   * //   "redirectUrl": "https://auth.triauthdemo.org/sign.html#?challenge=eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzaWduIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJLRXZCSVBLZFRLX1JNYldFUkZVVFpBcUkiLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MSwibXNnIjoiVG8gY29udGludWUsIHBsZWFzZSByZWFkIGFuZCBhY2NlcHQgdGhlIGF0dGFjaGVkIExpY2Vuc2UiLCJhdHRhY2htZW50cyI6W3sibmFtZSI6IkxpY2Vuc2UiLCJzb3VyY2VVcmwiOiJodHRwczovL3Jhdy5naXRodWJ1c2VyY29udGVudC5jb20vc3BkeC9saWNlbnNlLWxpc3QtZGF0YS9yZWZzL2hlYWRzL21haW4vdGV4dC9BR1BMLTMuMC1vci1sYXRlci50eHQiLCJzaGEyNTYiOiJkOGE2Y2MzMWFiYzE2YjY3NDhjN2EyMWYyMTYxMWY1YTFlYzMzZjY3ZDIyY2EyM2Q3ZGExYzE5Yjk1NDk2YmVlIn1dfQ&token=:rZCy5mqxuP2Oru3AWovmMd7ym4oqyx7sBV033WcLlNk"
+   * //   "challenge": "eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzaWduIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJLRXZCSVBLZFRLX1JNYldFUkZVVFpBcUkiLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MSwiZWsiOiJCTEYxdEVWQkVZMGpBZ3lFcGM0MUJSdTRHS2loaTVneDhyalFmY2Q3UnFOUGFUd1kyeG1zYkNSZ0YxNkN5VWJuRk5XUFREZndkMV9XTVlEWldRdWFOblkiLCJtc2ciOiJUbyBjb250aW51ZSwgcGxlYXNlIHJlYWQgYW5kIGFjY2VwdCB0aGUgYXR0YWNoZWQgTGljZW5zZSIsImF0dGFjaG1lbnRzIjpbeyJuYW1lIjoiTGljZW5zZSIsInNvdXJjZVVybCI6Imh0dHBzOi8vcmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbS9zcGR4L2xpY2Vuc2UtbGlzdC1kYXRhL3JlZnMvaGVhZHMvbWFpbi90ZXh0L0FHUEwtMy4wLW9yLWxhdGVyLnR4dCIsInNoYTI1NiI6ImQ4YTZjYzMxYWJjMTZiNjc0OGM3YTIxZjIxNjExZjVhMWVjMzNmNjdkMjJjYTIzZDdkYTFjMTliOTU0OTZiZWUifV19.zN__zhGHx9hT7gakwy1WZ33JRURklZVmS-crUohEchE",
+   * //   "redirectUrl": "https://auth.triauthdemo.org/sign.html#?skid=wzI1sz3n1R4biw4FL_VJ3Q&request=23luwOGXdIM6JX8f._EkvQKPuF6kR2v-ur9aIU1QkqCDURnpq-_GThw669vCmekrNYmLC6ZaVuqHLy3i77tFqNUed5hlm-Yk1KLkyroMGnQQl5_jS7CPrwTthn0MjrHrf0hBcVBdeD_3mGTm-wFDjXS6qpgZO9721poQnV3Cj-a6rxQXyX6o1tOD8_JdiEql23uFQ8axvbnpFVP7w-QLj9IuNU6jeM2hOGNrS-n6TKR11iQ40bfyERFWNtQNgrDTh1A_fnnxv_YPTTBdnzgFiDe09M0h93ZACRVJGLWNGj4dx4xsa5l08cC0-6a1BwuShxbMtoWROFLky0vUNkbAseko-4xKvuIIXAu5AmPDTXfLpiormgzmGK72f0aokY1YUUy0VzGIsTDdjCxqPJTgrDlt4g1uJu60yfSCPdHOWubbRj5eMdhTW3p6LzOWIDZPDpSeC141v9eX7wbTB_KIJiJwCvHD1dbq3fTaTM0z313WzT8VXKc5RPtaIWz8J1L7KiZcH2NjjyqFRJ1jYHPj2g8JPiPo5wohmcuPqC98l7cBPK_GI0PXEuuWvuEqk9uDXtufhBHwu2wLOx-n2n9ktLHnE1Bgw5qkYn6-YJD5NJ1YCjljc4_Une_smlyXL6-cDm-dD3ugp1rw1SbVv_f5m8uQUvkHxkxKXrSqSmljxFsG4g9kbf3myh39d5iODAxuwzLcGdOAXWHmIS9Hmkx2rLytc-v8emjPu9Ktb5iD0yZtKAX4-3eWBHzBgPr3wbA"
    * // }
    * ```
    *
@@ -5897,7 +6331,7 @@
    *
    * **3. Verify**
    *
-   * After the user approves the signing request, the Triauth Authenticator application redirects the user's web browser to the previously provided `callbackUrl`, by default through the [HTTP POST method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/POST), and passes a signature in the `response` form parameter.
+   * After the user approves the signing request, the Triauth Authenticator application redirects the user's web browser to the previously provided `callbackUrl`, by default through the [HTTP GET method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/GET), and passes a signature in the `response` URL parameter.
    * The method that is used to pass the response to your application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.sign` function together with the previously stored `challenge` (string) to obtain signing result.
@@ -5918,8 +6352,8 @@
    * ```javascript
    * await Triauth.sign(
    *   {
-   *    challenge:'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzaWduIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJLRXZCSVBLZFRLX1JNYldFUkZVVFpBcUkiLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MSwibXNnIjoiVG8gY29udGludWUsIHBsZWFzZSByZWFkIGFuZCBhY2NlcHQgdGhlIGF0dGFjaGVkIExpY2Vuc2UiLCJhdHRhY2htZW50cyI6W3sibmFtZSI6IkxpY2Vuc2UiLCJzb3VyY2VVcmwiOiJodHRwczovL3Jhdy5naXRodWJ1c2VyY29udGVudC5jb20vc3BkeC9saWNlbnNlLWxpc3QtZGF0YS9yZWZzL2hlYWRzL21haW4vdGV4dC9BR1BMLTMuMC1vci1sYXRlci50eHQiLCJzaGEyNTYiOiJkOGE2Y2MzMWFiYzE2YjY3NDhjN2EyMWYyMTYxMWY1YTFlYzMzZjY3ZDIyY2EyM2Q3ZGExYzE5Yjk1NDk2YmVlIn1dfQ',
-   *    response:'|sign;john@triauthdemo.org;;https://example.com/;v1;1787224774435;eyJhdHRhY2htZW50cyI6W3sibmFtZSI6IkxpY2Vuc2UiLCJzaGEyNTYiOiJkOGE2Y2MzMWFiYzE2YjY3NDhjN2EyMWYyMTYxMWY1YTFlYzMzZjY3ZDIyY2EyM2Q3ZGExYzE5Yjk1NDk2YmVlIn1dfQ;;pj0gdEVQ3JBYh08jknFpY45WX462AUb1z78mINHewl1NXWzU5_g9ibD3-ffbdH9SIGtQTtcHQrsa3Ivt1wg1sg|'
+   *    challenge:'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzaWduIiwiaWRlbnRpZmllciI6ImpvaG5AdHJpYXV0aGRlbW8ub3JnIiwibm9uY2UiOiJLRXZCSVBLZFRLX1JNYldFUkZVVFpBcUkiLCJpYXQiOjE3ODcyMjQ3NDg0NDksInZlciI6MSwiZWsiOiJCTEYxdEVWQkVZMGpBZ3lFcGM0MUJSdTRHS2loaTVneDhyalFmY2Q3UnFOUGFUd1kyeG1zYkNSZ0YxNkN5VWJuRk5XUFREZndkMV9XTVlEWldRdWFOblkiLCJtc2ciOiJUbyBjb250aW51ZSwgcGxlYXNlIHJlYWQgYW5kIGFjY2VwdCB0aGUgYXR0YWNoZWQgTGljZW5zZSIsImF0dGFjaG1lbnRzIjpbeyJuYW1lIjoiTGljZW5zZSIsInNvdXJjZVVybCI6Imh0dHBzOi8vcmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbS9zcGR4L2xpY2Vuc2UtbGlzdC1kYXRhL3JlZnMvaGVhZHMvbWFpbi90ZXh0L0FHUEwtMy4wLW9yLWxhdGVyLnR4dCIsInNoYTI1NiI6ImQ4YTZjYzMxYWJjMTZiNjc0OGM3YTIxZjIxNjExZjVhMWVjMzNmNjdkMjJjYTIzZDdkYTFjMTliOTU0OTZiZWUifV19.zN__zhGHx9hT7gakwy1WZ33JRURklZVmS-crUohEchE',
+   *    response:'BFUYnuW1tUiltgq1DQbLeqpZTNDwDJm89hxkfrBuuNNdTmmwoRYuR5dZeVdnrJWbcSiLfO2VPYuTw-mBq6EZi0c.HUJzImw0j-Uo629gvuIMb6ePe9G835vaz7bURvqz5ICtkxc9vP4sRRXTnkhpQl8lsVVX4aYs1ltz-eft2aqxyUwfaaPYRPhWGj3rwUdr9lXnT8qtSkyInacgxWWx8MCPoveO1GBBD2iIE4-o9vUEfPziEh9dz7bBf_1Y_xM_fFXHEXZaGz1CWBN42S24BnKuVUvcT1gGfJiSIDdoG8YdU6xUFWJwhxwZupQbjIbfGuXrwXVrVejuE3_sgIy7pQ2SyLgSQcoBw329vTJns0b5QcjyRojzc9dS1iWeQWj_3TjF7nQh8F9sHWVqvdc0YCDncrcR_z-uTjDhgzShnhevHXukgQ_-Dze4kOd1wgUiwfEEIQvclIyVkSyrEcMt9bIUkmhb5Su5eicMnzdEZIvLMJQ7gssUxPE8B7_DXKZgMEnH'
    *   }
    * );
    * //
@@ -5991,11 +6425,11 @@
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
    * @param [options.message] {string} - (stage 1) a human-readable text message to be signed
    * @param [options.attachments] {Array<{name: string, sourceUrl: string, sha256: string}>} - (stage 1) optional list of at most 10 attachments to be covered by the signature; `name` must be unique within the list and `sha256` a lowercase hex digest
-   * @param [options.token] {string} - (stage 1, required) the `signToken` previously obtained via `ext.signToken` from a `Triauth.authenticate` call; a stage-1 request without it returns error 226
+   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result; a stage-1 request without a valid session key returns error 226
    * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{callbackMethod:'GET'}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
-   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` form parameter of a POST to the `callbackUrl` (overridable via the `callbackMethod` extension)
+   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` URL parameter of a GET to the `callbackUrl` (overridable via the `callbackMethod` extension)
    *
    * @param [config={}] {object} - Optional overrides for the global Triauth.config settings
    *
@@ -6023,14 +6457,9 @@
    * > need replay protection must include a fresh, verifier-chosen nonce inside `message` itself.
    *
    * > [!NOTE]
-   * > **To use this function you must request and obtain a special `stampToken`**<br/>
-   * > To do so, provide the `ext:{stampToken:true}` parameter to the `Triauth.authenticate` function during the initial call (i.e., when building the challenge),
-   * > and, given that the user agrees and/or authenticator supports it, in the authentication result you will receive `ext.stampToken` property (string).
-   * > You should keep the `stampToken` value private, and pass it as a `token` parameter in the initial call to the `stamp` method.
-   * > The token is issued by the authenticator on the device that signed in, and only that device honors it.
-   * > The authenticator keeps its copy in that browser's storage, and the next sign-in on that device, approved or denied, replaces or removes it.
-   * > Store the token in the session that the sign-in created, next to the `challenge` and `deviceTag`, not on the user's account, and pass that session's token.
-   * > A user with several devices holds a different token on each.
+   * > **Get the `stamp` permission and use the same base callbackUrl as for authentication**<br/>
+   * > To get the permission, provide the `ext:{permissions:{stamp:true}}` parameter to the `Triauth.authenticate` function during the initial call (i.e., when building the challenge).
+   * > The authentication result shows the decision in `ext.permissions`. You can use `stamp` only when the authenticator responds with `ext.permissions?.stamp === true`.
    * >
    * > Also, the `callbackUrl` used in this method must have the **same base URL** (its origin plus the path up to and including the last `/`) as the `callbackUrl` from the initial `Triauth.authenticate` call.
    * > For example, if `callbackUrl` used for authentication was `https://example.com/dir1/callback`, the `callbackUrl` used in this method
@@ -6043,7 +6472,7 @@
    * At first, you need to call the `Triauth.stamp` method with the `identifier` option set to the user provided personal identifier (lowercase string),
    * a `callbackUrl` option set to the URL under which your application expects to receive a response (string),
    * a `message` (string) option set to a text message to be stamped,
-   * a `token` (string) option set to the `stampToken` previously obtained via `ext.stampToken` from a `Triauth.authenticate` call,
+   * a `sessionKey` (string) option set to the `sessionKey` of a `Triauth.authenticate` result,
    * and an optional `ext` option (object) listing the [protocol extensions](#protocol-extensions) that you wish to use.
    *
    * > [!NOTE]
@@ -6059,7 +6488,7 @@
    *
    * ```javascript
    *
-   * let result = await Triauth.stamp({identifier, callbackUrl, message, token, ext});
+   * let result = await Triauth.stamp({identifier, callbackUrl, message, sessionKey, ext});
    * // returns {challenge, redirectUrl} the challenge should be remembered, and user redirected to the redirectUrl
    * // returns {error} on error
    *
@@ -6073,24 +6502,24 @@
    *     identifier:'john@triauthdemo.org',
    *     callbackUrl:'https://example.com/triauth-callback',
    *     message: 'login-nonce:4f2d9c715b6e4a3c', // a fresh, single-use nonce from your server, when the stamp gates anything
-   *     token:':uXyqjnczCcq1xStskY7xN6-Q'
+   *     sessionKey:'59cKjF500rMz1OrAMqUyLhSbWx1RgJDsWL7dFBDYIP8'
    *   }
    * );
    * //
    * // {
-   * //   challenge: 'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzdGFtcCIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoic1ZoVXRZOXQzMEVDQjJUR0t2WTktZXpBIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjEsIm1zZyI6ImxvZ2luLW5vbmNlOjRmMmQ5YzcxNWI2ZTRhM2MifQ',
-   * //   redirectUrl: 'https://auth.triauthdemo.org/stamp.html#?challenge=eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzdGFtcCIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoic1ZoVXRZOXQzMEVDQjJUR0t2WTktZXpBIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjEsIm1zZyI6ImxvZ2luLW5vbmNlOjRmMmQ5YzcxNWI2ZTRhM2MifQ&token=:dIsLLvqBmQO_DS2o_HhLM5LRJk8hHdbr938NmJnif64'
+   * //   challenge: 'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzdGFtcCIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoic1ZoVXRZOXQzMEVDQjJUR0t2WTktZXpBIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjEsImVrIjoiQkdpOE1kZG11ZnFQdGNncEdwZFFvNDMzSTdxVzVHUm1uU0NmOGZaLVJHclppNng1ZHJNWkZIa3dQZXRkemFyZ21MQ2VvVU9HaF80dXJ6RWt6T3RKU0NrIiwibXNnIjoibG9naW4tbm9uY2U6NGYyZDljNzE1YjZlNGEzYyJ9.osPmHctBwGQUdU346YuJtHPJ-hh01Hia9bxCFZtYhNs',
+   * //   redirectUrl: 'https://auth.triauthdemo.org/stamp.html#?skid=wzI1sz3n1R4biw4FL_VJ3Q&request=qKIqh6XTsNbjhjis.huEd1iwa_Xd1q1OhHA7bUmFhfjxCtTEEoPs3l8JSkxJXMrIzBEbjk58CA24JnV6O6LIJ35YTzf3cfjBfBiZyjLdHRbHlpbanM-VTF0Utke_G6Y2Ol3onMk4vmWn40GN6XhyEYRitzXJfCKawNGjhjBoif6r5niNFsOh1f-RCVauYVKUpvSOoVPztSSwYAwtRs9FohwIBG48FpB6kI5xKQLtFJZbhBze0L02gWSwnXwQr5hMh4jOMPV9po7HZUfA1mmRgBkZPhUBSYknBBKYTa1qFadizopi9a9_M7UH1kNTWWEyIXxXt_ibIXhSu1n5-yxVwx2r-M-q7BnH0Nu-V5MDqCnE9fxJ19KoBjj1zpMfZMbx6b2T_zQ7ULPmmZrQKWZYlIDx_XY4f15M_AyZD72i5Awi9JA'
    * // }
    * //
    * ```
    *
    * **2. Redirect**
    *
-   * Once the user's web browser is redirected to the `redirectUrl`, and assuming that the `token` is valid, the Triauth Authenticator web application will immediately respond with the stamp to the `callbackUrl`.
+   * Once the user's web browser is redirected to the `redirectUrl`, the Triauth Authenticator web application immediately responds with the stamp to the `callbackUrl`. This needs a valid session key with the `stamp` permission.
    *
    * **3. Verify**
    *
-   * The Triauth Authenticator application redirects the user's web browser to the previously provided `callbackUrl`, by default through the [HTTP POST method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/POST), and passes a stamp in the `response` form parameter.
+   * The Triauth Authenticator application redirects the user's web browser to the previously provided `callbackUrl`, by default through the [HTTP GET method](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Methods/GET), and passes a stamp in the `response` URL parameter.
    * The method that is used to pass the response to your application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.stamp` function together with the previously stored `challenge` (string) to obtain stamping result.
@@ -6111,8 +6540,8 @@
    * ```javascript
    * await Triauth.stamp(
    *   {
-   *    challenge:'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzdGFtcCIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoic1ZoVXRZOXQzMEVDQjJUR0t2WTktZXpBIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjEsIm1zZyI6ImxvZ2luLW5vbmNlOjRmMmQ5YzcxNWI2ZTRhM2MifQ',
-   *    response:'|stamp;john@triauthdemo.org;;https://example.com/;v1;1787224751380;;;0lWRFGKZsAC18au2DqtYEavf7zXDkCQH0fTOqwB2QeWsKhSkm29NY0mz1r6VckOVL2utg3wp1QMnySEO56zupg|'
+   *    challenge:'eyJjYnVybCI6Imh0dHBzOi8vZXhhbXBsZS5jb20vdHJpYXV0aC1jYWxsYmFjayIsInR5cGUiOiJzdGFtcCIsImlkZW50aWZpZXIiOiJqb2huQHRyaWF1dGhkZW1vLm9yZyIsIm5vbmNlIjoic1ZoVXRZOXQzMEVDQjJUR0t2WTktZXpBIiwiaWF0IjoxNzg3MjI0NzQ4NDQ5LCJ2ZXIiOjEsImVrIjoiQkdpOE1kZG11ZnFQdGNncEdwZFFvNDMzSTdxVzVHUm1uU0NmOGZaLVJHclppNng1ZHJNWkZIa3dQZXRkemFyZ21MQ2VvVU9HaF80dXJ6RWt6T3RKU0NrIiwibXNnIjoibG9naW4tbm9uY2U6NGYyZDljNzE1YjZlNGEzYyJ9.osPmHctBwGQUdU346YuJtHPJ-hh01Hia9bxCFZtYhNs',
+   *    response:'BFpQrxQ6mXjTWkiCFbd1d1QmQdwwdTT56QAffbbiQf_in1BW_nwpZcWqOHgVOV_FnGZuUlFc0bKEZiUBp-SQW2g.dWHtvEeGPf217Qg3SoQ5BBFrytjc5IumJZDwPmGvd4n04pwr7BD8sQQFCGM6WTwc0zu1_nIy9v6_rG4oqtEVyAzVrG7Siepi6AIBwiLgQQqdjcFBX3LNH-Xh6xD_XBOyM4P9QSDJjicL5dg-KUg3P2XXp8J4Tke6F2QK1WyepNxfIY-wi6HeKmsVqTbUYjzj_tJs23jdDv7Ik_7m5CCYkZtq0Xxj8NZSU1BmEw'
    *   }
    * );
    *
@@ -6174,11 +6603,11 @@
    * @param [options.identifier] {string} - (stage 1) the user provided identifier
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
    * @param [options.message] {string} - (stage 1) a text message to be stamped
-   * @param [options.token] {string} - (stage 1, required) the `stampToken` previously obtained via `ext.stampToken` from a `Triauth.authenticate` call; a stage-1 request without it returns error 226
+   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result whose `ext.permissions.stamp` is `true`; a stage-1 request without a valid session key returns error 226
    * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{callbackMethod:'GET'}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
-   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` form parameter of a POST to the `callbackUrl` (overridable via the `callbackMethod` extension)
+   * @param [options.response] {string} - (stage 3) a received response, by default delivered as a `response` URL parameter of a GET to the `callbackUrl` (overridable via the `callbackMethod` extension)
    *
    * @param [config={}] {object} - Optional overrides for the global Triauth.config settings
    *
@@ -7651,8 +8080,10 @@
   exports.LIMITS = LIMITS;
   exports.Logger = Logger;
   exports.MultiSignature = MultiSignature;
+  exports.RequestCipher = RequestCipher;
   exports.Resolvers = Resolvers;
   exports.Response = Response;
+  exports.ResponseCipher = ResponseCipher;
   exports.Signature = Signature;
   exports.Validator = Validator;
   exports.Verifiers = index;

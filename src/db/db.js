@@ -450,7 +450,7 @@ export const db = {
   // Deletes a root row plus every row in the related stores whose indexed field
   // references it, all in one transaction - either everything goes or nothing does.
   // `relations` maps store name -> index name whose value must equal the root id,
-  // e.g. {websites: 'identityId', tokens: 'identityId'}. Flat by design: related
+  // e.g. {websites: 'identityId', sessions: 'identityId'}. Flat by design: related
   // stores carry a (possibly denormalized) reference to the root; there is no
   // transitive resolution.
   deleteCascade: async function (rootStore, id, relations) {
@@ -474,19 +474,17 @@ export const db = {
     });
   },
 
-  // Deletes an identity together with every websites/tokens row that references it.
+  // Deletes an identity together with every websites/sessions/verifications row that references it.
   deleteIdentity: async function (identityId) {
-    return this.deleteCascade('identities', identityId, {websites: 'identityId', tokens: 'identityId'});
+    return this.deleteCascade('identities', identityId, {websites: 'identityId', sessions: 'identityId', verifications: 'identityId'});
   },
 
-  // Deletes a website together with every token issued to it (the home screen's "Forget this website").
+  // Deletes a website together with its session and its verifications (the home screen's "Forget this website").
   deleteWebsite: async function (websiteId) {
-    return this.deleteCascade('websites', websiteId, {tokens: 'websiteId'});
+    return this.deleteCascade('websites', websiteId, {sessions: 'websiteId', verifications: 'websiteId'});
   },
 
-  // Removes rows whose expiresAt has passed - housekeeping for tokens left behind by
-  // abandoned flows. Flows also refuse expired tokens at use time (Helpers.tokenExpired),
-  // so this is about hygiene, not security.
+  // Removes rows from `storeName` whose `expiresAt` has passed.
   sweepExpired: async function (storeName) {
     const now = Date.now();
     const rows = await this.list(storeName);

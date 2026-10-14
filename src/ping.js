@@ -14,32 +14,42 @@ import "./signers/passphrase.js";
 import "./signers/webauthn.js";
 
 const run = async () => {
+  let session, challengeString;
+
+  try {
+    ({session, challengeString} = await Helpers.openRequest(window.location));
+
+  } catch (err) {
+    // A request that does not open gets no answer. Go back to the website, which counts the missing answer as a failure.
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      document.body.innerText = 'This request could not be opened. You can close this window.';
+    }
+
+    throw err;
+  }
+
   try {
     const {
-      params,
-      challengeString,
       challenge,
-      hmac,
       identifier,
       callbackUrl,
       baseUrl,
       ext
-    } = Helpers.parseRequest(window.location, 'ping');
+    } = Helpers.parseChallenge(challengeString, 'ping');
 
     // Do the security checks for referrer
     Helpers.ensureReferrerMatch(baseUrl);
 
     try {
-      // Try to keep the lookup at semi-constant time so that the existence of identifier is not revealed
-      const identity = await db.find('identities', {identifier});
-      const token = await db.find('tokens', {type: 'pingToken', identityId: identity?.id, baseUrl: baseUrl.href});
-      if (!identity || !token || Helpers.tokenExpired(token)) {
-        throw new Error('Identity or token not found or expired');
+      const identity = await Helpers.sessionIdentity(session, identifier, baseUrl);
+
+      if (!session.permissions.ping) {
+        throw new Error('The user did not allow ping requests at sign-in');
       }
 
-      await Helpers.ensureValidHmac(hmac, token.value, challengeString);
-
-      await db.patch('tokens', {id: token.id, lastUsedAt: Date.now()});
+      await db.patch('sessions', {id: session.id, lastUsedAt: Date.now()});
 
       const authenticator = new Authenticator(identity, identity.signers);
 
@@ -48,8 +58,9 @@ const run = async () => {
       }
 
       const signature = await authenticator.process('ping', baseUrl.href, String(challenge.challengeString));
+      const {sealedResponse} = await Helpers.sealResponse(challenge, signature);
 
-      Helpers.sendResponse(ext['callbackMethod'], callbackUrl, signature);
+      Helpers.sendResponse(ext['callbackMethod'], callbackUrl, sealedResponse);
 
     } catch (err) {
       if (Helpers.referrerMatchesCallback(callbackUrl)) {

@@ -61,8 +61,8 @@ const onHashChange = () => {
 onHashChange();
 onMounted(() => window.addEventListener('hashchange', onHashChange));
 
-// Housekeeping: drop expired tokens left behind by abandoned flows
-db.sweepExpired('tokens').catch((err) => Triauth.config.logger.error(err));
+// Housekeeping: drop expired verifications left behind by abandoned attest requests
+db.sweepExpired('verifications').catch((err) => Triauth.config.logger.error(err));
 
 </script>
 

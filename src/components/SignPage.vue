@@ -20,8 +20,11 @@ import CodeBlocksIcon from "../../vendor/material-icons/CodeBlocks.vue";
 import {Helpers} from "../lib/helpers.js";
 import {AppError} from "../lib/errors.js";
 
-// One of 'verifying', 'error', 'pending', 'denied'
+// One of 'verifying', 'unopened', 'error', 'pending', 'denied'
 const stateRef = ref('verifying');
+
+// A tab that opened on this request has no previous page to go back to
+const canGoBack = window.history.length > 1;
 
 let challenge = null;
 let baseUrl = null;
@@ -73,9 +76,21 @@ const ALLOWED_ATTACHMENT_CONTENT_TYPES = {
 
 
 async function setup() {
+  let session, challengeString;
+
   try {
-    const requestData = Helpers.parseRequest(window.location, 'sign');
-    const {identifier, ext, hmac, challengeString} = requestData;
+    ({session, challengeString} = await Helpers.openRequest(window.location));
+
+  } catch (err) {
+    // A request that does not open gets no answer (see Helpers.openRequest)
+    Triauth.config.logger.error(err, err.data);
+    stateRef.value = 'unopened';
+    return;
+  }
+
+  try {
+    const requestData = Helpers.parseChallenge(challengeString, 'sign');
+    const {identifier, ext} = requestData;
 
     challenge = requestData.challenge;
     baseUrl = requestData.baseUrl;
@@ -84,29 +99,14 @@ async function setup() {
     // Do the security checks for referrer
     Helpers.ensureReferrerMatch(baseUrl);
 
-    // Load the requested identity
-    identity = await db.find('identities', {identifier});
+    identity = await Helpers.sessionIdentity(session, identifier, baseUrl);
 
-    if (!identity) {
-      throw new AppError(`A website tried to request a signature from ${challenge.identity.identifier}, but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
-    }
+    await db.patch('sessions', {id: session.id, lastUsedAt: Date.now()});
 
-    // Find the token that should be used with this request
-    const token = await db.find('tokens', {type:'signToken', identityId:identity.id, baseUrl:baseUrl.href });
-
-    if (!token || Helpers.tokenExpired(token)) {
-      throw new AppError('The referring website is not allowed to request signatures', {identityId:identity.id, baseUrl:baseUrl.href});
-    }
-
-    // Do the security checks for hmac token
-    await Helpers.ensureValidHmac(hmac, token.value, challengeString);
-
-    await db.patch('tokens', {id: token.id, lastUsedAt: Date.now()});
-
-    // Double-check that the website entry in DB exists for the given token, and that the website has permission
-    website = await db.find('websites', {id: token.websiteId, identityId:identity.id});
+    // Double-check that the website entry in DB exists for the given session
+    website = await db.find('websites', {id: session.websiteId, identityId:identity.id});
     if (!website) {
-      throw new AppError('The referring website is not allowed to request signatures', {tokenId:token.id, websiteId:token.websiteId, identityId:identity.id});
+      throw new AppError('The referring website is not allowed to request signatures', {sessionId:session.id, websiteId:session.websiteId, identityId:identity.id});
     }
 
     // Validate the message to be signed, as embedded in challenge.data.msg
@@ -176,6 +176,10 @@ function humanizeBytesize(bytesize) {
   return `${mbSize} MB`;
 }
 
+function goBack() {
+  window.history.back();
+}
+
 function deny() {
   if (busyRef.value) return;
   busyRef.value = true;
@@ -197,8 +201,9 @@ async function confirm() {
     const signature = await authenticator.process('sign', baseUrl.href, String(message), {
       attachments: attachmentsRef.value.map((a) => ({name: a.name, sha256: a.sha256}))
     });
+    const {sealedResponse} = await Helpers.sealResponse(challenge, signature);
 
-    Helpers.sendResponse(callbackMethod, callbackUrl, signature);
+    Helpers.sendResponse(callbackMethod, callbackUrl, sealedResponse);
 
   } catch (err) {
     Triauth.config.logger.error(err, err.data);
@@ -221,9 +226,16 @@ async function confirm() {
       Verifying, please wait ...
     </div>
 
+    <div class="p-5 flex flex-col gap-4 text-center" v-else-if="stateRef === 'unopened'">
+      <div class="font-bold p-2">Signature request could not be opened</div>
+      <div class="text-sm p-2">Sign in to the website again, and then try again.</div>
+      <div class="p-2" v-if="canGoBack"><Button @click="goBack()">Back to the website</Button></div>
+      <div class="p-2" v-else>You can close this tab</div>
+    </div>
+
     <div class="p-5 flex flex-col gap-4 text-center" v-else-if="stateRef === 'error'">
       <div class="font-bold p-2">Signature request could not be processed</div>
-      <div class="text-sm p-2">{{errorMessageRef}}</div>
+      <div class="text-sm p-2 break-words">{{errorMessageRef}}</div>
       <div class="p-2">You can close this tab or navigate back to the previous page</div>
     </div>
 

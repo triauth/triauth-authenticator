@@ -85,11 +85,11 @@ const showContextMenu = (event) => {
 
 const confirm = useConfirm();
 
-// Forgetting a website drops its record and every token issued to it
+// Forgetting a website drops its record, its session and its verifications
 const confirmForgetWebsite = (website) => {
   confirm.require({
     header: 'Forget this website?',
-    message: `${website.manifest?.name || website.baseUrl} and its access tokens will be removed from this device. You may be signed out there, and your next sign-in will ask for your approval again.`,
+    message: `${website.manifest?.name || website.baseUrl} will be removed. You may be signed out there, and your next sign-in will ask for your approval again.`,
     acceptProps: { label: 'Forget', severity: 'danger' },
     rejectProps: { label: 'Cancel', severity: 'secondary', variant: 'outlined' },
     accept: () => db.deleteWebsite(website.id)
