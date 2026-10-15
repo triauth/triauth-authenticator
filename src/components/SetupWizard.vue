@@ -21,7 +21,7 @@
         <InputText id="identifier" v-model="identifier" @input="validateIdentifier" @keydown.enter.prevent="submitField" @keydown.esc.prevent="close" aria-describedby="identifier-help" placeholder="e.g., john@example.com" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus/>
         <Message size="small" severity="secondary" variant="simple" class="text-left min-w-0" :pt="{contentWrapper: {class: 'min-w-0'}, text: {class: 'min-w-0 grow'}}" v-if="!identifierError" id="identifier-help">
           <div v-if="!identifier" style="line-height: 1.75em;">
-            <p>Create a new one or use one you already have. It can be your email address. You will use it to sign in to websites without a password.</p>
+            <p>You will use it to sign in to websites without a password. Create a new identifier or enter one you already have. It can be your email address.</p>
             <p class="mt-2">New to triauth? <a href="https://www.triauth.org/identity/get-started" target="_blank" rel="noopener noreferrer" class="underline inline-block">See what you need to get started.</a></p>
           </div>
           <div v-else>
@@ -138,7 +138,6 @@
             </div>
             <div v-else-if="isPrivate">
               <div class="_status"><span>✓</span>Domain is configured for triauth</div>
-              <div class="_status mt-3"><InfoIcon class="_info" aria-hidden="true"/>This domain runs in private mode.</div>
             </div>
             <div v-else-if="whoisResponse.status === 0">
               <div class="_status"><span>✓</span>Domain is configured for triauth</div>
@@ -367,7 +366,7 @@
               </tr>
               <tr>
                 <th scope="row">Value / Content</th>
-                <td>
+                <td class="_value">
                   <template v-if="dnsEntries.toAdd.length > 1">Add a separate record for each of these {{ dnsEntries.toAdd.length }} values:</template>
                   <div v-for="(rec, i) of dnsEntries.toAdd" :key="i" :class="{'mt-1': i > 0 || dnsEntries.toAdd.length > 1}"><code class="_sel" :title="copyTitle" @click="selectFragment">{{ rec }}</code></div>
                 </td>
@@ -489,9 +488,9 @@ if (import.meta.env.DEV) {
 }
 
 // Tries to focus the DOM element marked with 'autofocus' attribute
-const autofocus = async () => {
+const autofocus = async (options) => {
   await nextTick();
-  document.querySelector('[autofocus]')?.focus();
+  document.querySelector('[autofocus]')?.focus(options);
 }
 autofocus();
 
@@ -518,7 +517,8 @@ const go = (dir) => {
   let i = STEPS.indexOf(step.value) + dir;
   while (skipped(STEPS[i])) i += dir;
   step.value = STEPS[i];
-  autofocus();
+  nextTick(() => window.scrollTo(0, 0));
+  autofocus({preventScroll: true});
 };
 const next = () => go(1);
 const prev = () => go(-1);
@@ -1088,6 +1088,7 @@ const addTestIdentity = async (entry) => {
 ._record th { font-weight:normal; text-align:left; padding:0.25rem 0.75rem 0.25rem 0; width:1%; white-space:nowrap; vertical-align:top; }
 ._record td { padding:0.25rem 0; }
 ._record td code { display:inline-block; max-width:100%; padding:0.125rem 0.5rem; border:1px solid var(--color-gray-200); border-radius:0.25rem; background:white; color:var(--p-text-color, #334155); font-size:0.8125rem; line-height:1.5; overflow-wrap:anywhere; }
+._record td._value code { line-break:anywhere; }
 /* The info sign as an SVG: Android's text fonts have no glyph for 🛈 */
 ._info { display:inline-block; width:1.125em; height:1.125em; fill:currentColor; vertical-align:-0.125em; }
 
