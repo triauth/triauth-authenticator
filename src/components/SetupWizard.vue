@@ -41,7 +41,7 @@
                   <InfoIcon class="_info" aria-hidden="true"/>
                   <p class="_lead"><strong>{{ identifierDomain }}</strong> does not support triauth yet. Your identifier has to be at a domain you own.</p>
                   <p class="mt-3">If you do not have one, you can buy a domain in a few minutes.</p>
-                  <p class="mt-3"><Button as="a" href="https://www.cloudflare.com/domains/" target="_blank" rel="noopener noreferrer" variant="outlined" size="small" class="_ext">Find a domain with Cloudflare Registrar<OpenInNewIcon aria-hidden="true"/></Button></p>
+                  <p class="mt-3"><Button as="a" href="https://www.cloudflare.com/domains/" target="_blank" rel="noopener noreferrer" variant="outlined" size="small" class="_ext">Find your new domain with Cloudflare Registrar<OpenInNewIcon aria-hidden="true"/></Button></p>
                   <p class="mt-3">Besides triauth, you can use the same domain for personalized email, websites, and more.</p>
                   <p class="mt-3">If your organization has its own domain, you can use your work email address instead.</p>
                 </div>
@@ -383,10 +383,6 @@
             </template>
           </div>
         </div>
-
-        <Message size="small" severity="secondary" variant="simple" class="text-left" v-if="isPrivate">
-          <div class="_status"><InfoIcon class="_info" aria-hidden="true"/>The subdomain name is derived from your identifier and your lookup code.</div>
-        </Message>
 
         <Message size="small" :severity="!dnsRecordsVerified ? 'error' : 'secondary'" variant="simple" class="text-left" v-if="dnsRecordsVerified !== undefined && dnsRecordsVerified !== null">
           <div class="_status" v-if="!dnsRecordsVerified">
