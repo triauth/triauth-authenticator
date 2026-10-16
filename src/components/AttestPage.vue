@@ -12,6 +12,7 @@ import { db } from '../db/db.js'
 
 import OpenInNewIcon from '../../vendor/material-icons/OpenInNew.vue';
 import VerifiedIcon from '../../vendor/material-icons/Verified.vue';
+import CloseIcon from '../../vendor/material-icons/Close.vue';
 import {Helpers} from "../lib/helpers.js";
 
 import {AppError, CancelledError} from "../lib/errors.js";
@@ -61,7 +62,8 @@ async function verifyResponse(params) {
     const response = params.get('response');
     const verificationId = params.get('verification');
 
-    if (!Triauth.Validator.validateResponse(response).valid) {
+    // A provider that declined sends back 'false' instead of its signature
+    if (response !== 'false' && !Triauth.Validator.validateResponse(response).valid) {
       throw new AppError('Invalid or missing response parameter', {response});
     }
 
@@ -192,16 +194,23 @@ async function refreshVerifications() {
   for (const [k,v] of Object.entries(requestedAttestRef.value)) {
     if (v.verification && !v.verification.response) {
       v.verification = await db.get('verifications', v.verification.id);
-      if (v.verification.response) {
+      if (v.verification.response === 'false') {
+        v.verification.isVerified = false;
+
+      } else if (v.verification.response) {
 
         // Verify the response - the verification is quite lax, as the client website will do the final proper verification
         const verifyRes = await Triauth.verify(challengeDigest, v.verification.response, {
           type: 'attest',
+          actor: '',
           notBefore: pageLoadTimestamp - Triauth.config.maximalAllowedClientClockDrift,
           notAfter: Date.now() + Triauth.config.maximalAllowedClientClockDrift
         });
 
-        v.verification.isVerified = verifyRes?.valid === true;
+        // As on the website, the signature must come from one of the listed providers, by an identity at that provider's host
+        v.verification.isVerified = verifyRes?.valid === true &&
+          v.providers.includes(verifyRes.via) &&
+          verifyRes.identifier.replace(/.+@/, '') === Triauth.Helpers.urlHost(verifyRes.via);
       }
     }
   }
@@ -349,11 +358,16 @@ async function confirm() {
               <div class="font-bold py-2 flex align-middle">
                 <label class="grow">{{val.label}}</label>
                 <VerifiedIcon v-if="val.verification?.isVerified"/>
+                <CloseIcon class="fill-red-600" v-else-if="val.verification?.isVerified === false"/>
               </div>
               <div class="text-sm py-2 text-slate-800 flex justify-between" v-if="!val.verification?.isVerified">
                 <Select v-model="val.selectedProvider" :options="val.providers" placeholder="Select verification provider" class="grow max-w-[65%]"/>
-                <Button @click="performVerification(key)" class="font-normal" v-if="val.selectedProvider"><OpenInNewIcon/> Click to verify</Button>
+                <Button @click="performVerification(key)" class="font-normal" v-if="val.selectedProvider"><OpenInNewIcon class="fill-current" aria-hidden="true"/> Click to verify</Button>
               </div>
+              <Message size="small" severity="error" variant="simple" v-if="val.verification?.isVerified === false">
+                {{val.verification.response === 'false' ? 'The provider did not confirm this.' : 'This verification failed.'}}
+                Try again, or select another provider.
+              </Message>
             </div>
           </div>
 

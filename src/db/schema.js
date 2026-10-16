@@ -67,7 +67,7 @@ export const SCHEMA = {
 
     'createdAt': {type: 'number'},
     'expiresAt': {type: 'number'},
-    'response': {type: 'string', optional: true}
+    'response': {type: 'string', optional: true} // the provider's signature, or 'false' when it declined
   },
 
   'sessions': {
