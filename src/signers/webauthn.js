@@ -6,6 +6,7 @@
 
 import BaseSigner from "./base.js";
 import CryptoHelpers from "../lib/cryptoHelpers.js"
+import { CancelledError } from "../lib/errors.js";
 
 class WebauthnSigner extends BaseSigner {
 
@@ -66,17 +67,26 @@ class WebauthnSigner extends BaseSigner {
 
     const webAuthnChallenge = new Uint8Array(await crypto.subtle.digest('SHA-256', message));
 
-    const assertion = await navigator.credentials.get({
-      publicKey: {
-        challenge: webAuthnChallenge,
-        rpId: this.data.rpId,
-        allowCredentials: [{
-          id: this.data.credentialRawId,   // the rawId from registration
-          type: "public-key"
-        }],
-        timeout: 60000
+    let assertion;
+    try {
+      assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: webAuthnChallenge,
+          rpId: this.data.rpId,
+          allowCredentials: [{
+            id: this.data.credentialRawId,   // the rawId from registration
+            type: "public-key"
+          }],
+          timeout: 60000
+        }
+      });
+    } catch (err) {
+      // Browsers report a cancelled or timed out prompt as NotAllowedError (older Firefox as AbortError)
+      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
+        throw new CancelledError('The security key prompt was cancelled, so the request was not signed', {cause: err});
       }
-    });
+      throw err;
+    }
 
     const signature = CryptoHelpers.derToP1363(assertion.response.signature);
 

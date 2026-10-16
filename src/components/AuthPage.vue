@@ -9,7 +9,7 @@
 import { computed, ref } from 'vue';
 import { Authenticator } from "../lib/authenticator.js";
 import { Helpers } from "../lib/helpers.js";
-import {AppError} from "../lib/errors.js";
+import {AppError, CancelledError} from "../lib/errors.js";
 import { captureIcon } from "../lib/shortcutIcon.js";
 
 import { db } from '../db/db.js'
@@ -153,6 +153,17 @@ async function confirm(){
   busyRef.value = true;
 
   try {
+    const signedMetadata = {};
+
+    // The response tells the website the decision on each permission. Approval grants all of them.
+    if (Object.keys(requestedPermissions).length > 0) {
+      signedMetadata.ext = {permissions: {...requestedPermissions}};
+    }
+
+    // Signed first, so that a dismissed signer prompt leaves nothing stored
+    const authenticator = new Authenticator(identity, identity.signers);
+    const responseData = await authenticator.process('auth', baseUrl.href, challenge.challengeString, signedMetadata);
+
     website.lastLoginAt = Date.now();
 
     // The tile icon is captured under this approval, and only when there is none yet or the site now
@@ -169,16 +180,6 @@ async function confirm(){
     }
 
     website = await storeWebsite(website);
-
-    const signedMetadata = {};
-
-    // The response tells the website the decision on each permission. Approval grants all of them.
-    if (Object.keys(requestedPermissions).length > 0) {
-      signedMetadata.ext = {permissions: {...requestedPermissions}};
-    }
-
-    const authenticator = new Authenticator(identity, identity.signers);
-    const responseData = await authenticator.process('auth', baseUrl.href, challenge.challengeString, signedMetadata);
 
     // Sealing the response also gives the session key, which only the website and this authenticator know. The
     // requests that follow this sign-in are sealed under it, and contain its ID (skid) so that they can be found.
@@ -199,6 +200,12 @@ async function confirm(){
     Helpers.sendResponse(callbackMethod, callbackUrl, sealedResponse);
 
   } catch (err) {
+    // A dismissed prompt leaves the request as it was, ready to be approved again
+    if (err instanceof CancelledError) {
+      busyRef.value = false;
+      return;
+    }
+
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
     errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';

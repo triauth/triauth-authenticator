@@ -5,7 +5,7 @@
  */
 
 import BaseSigner from "./base.js";
-import { AppError } from "../lib/errors.js";
+import { CancelledError } from "../lib/errors.js";
 import { promptPassphrase } from "../lib/passphrasePrompt.js";
 
 // Current PBKDF2 work factor (the OWASP floor for PBKDF2-HMAC-SHA256). Stored per key
@@ -104,7 +104,7 @@ class PassphraseSigner extends BaseSigner {
     while (true) {
       const passphrase = await promptPassphrase({ title: 'Enter your passphrase', error });
       if (passphrase === null) {
-        throw new AppError('The passphrase prompt was cancelled, so the request was not signed');
+        throw new CancelledError('The passphrase prompt was cancelled, so the request was not signed');
       }
 
       const iterations = this.data.iterations || PBKDF2_ITERATIONS; // fallback for keys made before iterations were stored

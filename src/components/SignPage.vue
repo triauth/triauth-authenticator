@@ -18,7 +18,7 @@ import VideoFileIcon from "../../vendor/material-icons/VideoFile.vue";
 import CodeBlocksIcon from "../../vendor/material-icons/CodeBlocks.vue";
 
 import {Helpers} from "../lib/helpers.js";
-import {AppError} from "../lib/errors.js";
+import {AppError, CancelledError} from "../lib/errors.js";
 
 // One of 'verifying', 'unopened', 'error', 'pending', 'denied'
 const stateRef = ref('verifying');
@@ -206,6 +206,12 @@ async function confirm() {
     Helpers.sendResponse(callbackMethod, callbackUrl, sealedResponse);
 
   } catch (err) {
+    // A dismissed prompt leaves the request as it was, ready to be approved again
+    if (err instanceof CancelledError) {
+      busyRef.value = false;
+      return;
+    }
+
     Triauth.config.logger.error(err, err.data);
     stateRef.value = 'error';
     errorMessageRef.value = err instanceof AppError ? err.message : 'An internal error has occurred';

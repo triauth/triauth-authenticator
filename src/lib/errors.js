@@ -15,3 +15,6 @@ export class AppError extends Error {
     this.timestamp = new Date();
   }
 }
+
+// The user dismissed a signer's prompt, so nothing was signed. The request stays open to be approved again.
+export class CancelledError extends AppError {}
