@@ -106,7 +106,7 @@ Every release includes a prebuilt `triauth-authenticator-<version>.tar.gz`, a `S
 Download, verify, unpack, and serve:
 
 ```bash
-VERSION=1.0.0-beta.3
+VERSION=1.0.0-beta.4
 REPO=triauth/triauth-authenticator
 
 gh release download "v$VERSION" --repo "$REPO" \
