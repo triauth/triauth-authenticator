@@ -5,6 +5,7 @@
  */
 
 import BaseSigner from "./base.js";
+import CryptoHelpers from "../lib/cryptoHelpers.js";
 class DefaultSigner extends BaseSigner {
 
   type = 'default';
@@ -26,7 +27,7 @@ class DefaultSigner extends BaseSigner {
       ['sign', 'verify']
     );
 
-    this.publishableKey = Triauth.Helpers.arrayBufferToBase64Url(await crypto.subtle.exportKey('raw', cryptoKeys.publicKey));
+    this.publishableKey = Triauth.Helpers.arrayBufferToBase64Url(CryptoHelpers.compressP256(await crypto.subtle.exportKey('raw', cryptoKeys.publicKey)));
     this.data = cryptoKeys;
 
     return this;
@@ -46,10 +47,9 @@ class DefaultSigner extends BaseSigner {
     return Triauth.Helpers.arrayBufferToBase64Url(signature);
   }
 
+  // No options: `type=es256` and a `use` of every verb are the protocol defaults
   publishableKeyOptions() {
-    return {
-      'type': 'es256'
-    }
+    return {}
   }
 
 }

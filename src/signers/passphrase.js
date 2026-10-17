@@ -5,6 +5,7 @@
  */
 
 import BaseSigner from "./base.js";
+import CryptoHelpers from "../lib/cryptoHelpers.js";
 import { CancelledError } from "../lib/errors.js";
 import { promptPassphrase } from "../lib/passphrasePrompt.js";
 
@@ -77,7 +78,7 @@ class PassphraseSigner extends BaseSigner {
       { name: 'AES-GCM', iv }
     );
 
-    this.publishableKey = Triauth.Helpers.arrayBufferToBase64Url(await crypto.subtle.exportKey('raw', keyPair.publicKey));
+    this.publishableKey = Triauth.Helpers.arrayBufferToBase64Url(CryptoHelpers.compressP256(await crypto.subtle.exportKey('raw', keyPair.publicKey)));
     this.data = {salt, iv, wrappedPrivateKey, iterations: PBKDF2_ITERATIONS};
 
     return this;
@@ -127,9 +128,9 @@ class PassphraseSigner extends BaseSigner {
     }
   }
 
+  // `type=es256` is the protocol default, so only `use` is published
   publishableKeyOptions() {
     return {
-      'type': 'es256',
       'use': this.use.join(',')
     }
   }

@@ -886,8 +886,8 @@ const dnsRecords = function(){
 
   // Keys
   for (const [idx, signer] of Object.entries(signers.value)) {
-    const publishableKeyOptions = Object.entries(signer.publishableKeyOptions()).map(([k,v]) => `${k}=${v}` ).join(' ');
-    entries.toAdd.push(`key ${deviceName.value}[${parseInt(idx, 10) + 1}/${ signers.value.length }]:${signer.publishableKey} ${publishableKeyOptions}`);
+    const publishableKeyOptions = Object.entries(signer.publishableKeyOptions()).map(([k,v]) => ` ${k}=${v}` ).join('');
+    entries.toAdd.push(`key ${deviceName.value}[${parseInt(idx, 10) + 1}/${ signers.value.length }]:${signer.publishableKey}${publishableKeyOptions}`);
   }
 
   return entries;

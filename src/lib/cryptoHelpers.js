@@ -12,6 +12,17 @@ class CryptoHelpers {
     return bytes.slice(-65); // last 65 bytes are 0x04 || x (32) || y (32)
   }
 
+  // Returns the 33-byte compressed form of a 65-byte uncompressed P-256 point: a prefix
+  // that carries the parity of y, then x. Key records publish this form; it saves 32 bytes per key.
+  static compressP256(point) {
+    const bytes = new Uint8Array(point);
+    if (bytes.length !== 65 || bytes[0] !== 0x04) throw new Error('Not an uncompressed P-256 point');
+    const out = new Uint8Array(33);
+    out[0] = 0x02 | (bytes[64] & 1);
+    out.set(bytes.subarray(1, 33), 1);
+    return out;
+  }
+
   // Fallback for browsers whose AuthenticatorAttestationResponse lacks getPublicKey()
   // (e.g. Safari < 15.5): digs the ES256 public key out of the attestation object.
   // Minimal parsing in the spirit of the helpers here, not a general CBOR decoder -

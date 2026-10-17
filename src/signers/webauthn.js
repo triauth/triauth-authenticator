@@ -44,14 +44,14 @@ class WebauthnSigner extends BaseSigner {
       }
     });
 
-    // Extract the public key in triauth publishableKey format from the credentials.create
-    // response; older browsers (e.g. Safari < 15.5) lack getPublicKey(), so fall back to
+    // Extract the public key from the credentials.create response and publish it as the
+    // compressed point; older browsers (e.g. Safari < 15.5) lack getPublicKey(), so fall back to
     // digging the key out of the attestation object.
     const spki = credential.response.getPublicKey?.();
     const rawKey = spki
       ? CryptoHelpers.spkiToRaw(spki)
       : CryptoHelpers.attestationToRawP256(credential.response.attestationObject);
-    this.publishableKey = Triauth.Helpers.arrayBufferToBase64Url(rawKey);
+    this.publishableKey = Triauth.Helpers.arrayBufferToBase64Url(CryptoHelpers.compressP256(rawKey));
 
     const credentialRawId = credential.rawId;
     const credentialJSON = JSON.stringify(credential);
