@@ -1,5 +1,5 @@
 /*!
- * triauth-js v1.0.0-beta.2
+ * triauth-js v1.0.0-beta.3
  *
  * See https://www.triauth.org/ and https://github.com/triauth/triauth-js/ for more details.
  *
@@ -366,6 +366,8 @@
     static #NORMAL_STRING_REGEXP = /^[\p{L}\p{N} ~!@#$%^&*()_\-+={}[\]|\\:;"'<,>.?/]+$/u; // the Unicode property escape \p{L} matches any kind of letter from any language, \p{N} any number.
     static #UNPAIRED_SURROGATE_REGEXP = /\p{Cs}/u;                                // matches only UNPAIRED surrogates - the strings UTF-8 cannot encode.
     static #LOOKUP_CODE_REGEXP = /^[A-Z0-9]{16}$/;
+    static #P256_P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn; // the P-256 field prime p
+    static #P256_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn; // the P-256 curve coefficient b (a = -3)
 
     // eslint-disable-next-line no-restricted-globals
     static #ENCODER = new TextEncoder();
@@ -1051,6 +1053,76 @@
       );
 
       return new Uint8Array(await crypto.subtle.sign('HMAC', hmacKey, /** @type {BufferSource} */ (message)));
+    }
+
+    /**
+     * Returns a P-256 public key as the 65-byte uncompressed point (`0x04`, x, y), the form that the Web Crypto
+     * `raw` import accepts on all runtimes.
+     *
+     * Accepts the uncompressed point (65 bytes, prefix `0x04`) and returns it unchanged. Accepts the compressed
+     * point (33 bytes, prefix `0x02` or `0x03`, then x) and decodes it here, because not all Web Crypto
+     * implementations import a compressed point. Rejects all other forms, the hybrid form (prefix `0x06` or `0x07`)
+     * included, also on runtimes whose Web Crypto import accepts them. The result is therefore the same on all runtimes.
+     *
+     * @param bytes {Uint8Array} - The public key bytes.
+     * @returns {Uint8Array} the 65-byte uncompressed point.
+     *
+     * @throws {TypeError} when the bytes are not an uncompressed or a compressed point, or when the compressed point
+     *                     is not on the curve.
+     */
+    static decodeP256PublicKey(bytes) {
+      if (bytes.length === 65 && bytes[0] === 0x04) {
+        return bytes;
+      }
+
+      if (bytes.length !== 33 || (bytes[0] !== 0x02 && bytes[0] !== 0x03)) {
+        throw new TypeError('Invalid public key');
+      }
+
+      // x must be smaller than p, so that a key has one compressed form only
+      const p = Helpers.#P256_P;
+      const x = bytes.subarray(1).reduce((n, byte) => (n << 8n) | BigInt(byte), 0n);
+      if (x >= p) {
+        throw new TypeError('Invalid public key');
+      }
+
+      // y² = x³ - 3x + b (mod p). Because p = 3 (mod 4), r^((p + 1) / 4) is a square root of r when r has one.
+      const r = ((x * x % p) * x + 3n * (p - x) + Helpers.#P256_B) % p;
+      let y = Helpers.#modPow(r, (p + 1n) >> 2n, p);
+      if (y * y % p !== r) {
+        throw new TypeError('Invalid public key');
+      }
+
+      // The prefix gives the parity of y. No point on P-256 has y = 0, so p - y has the other parity.
+      if (Number(y & 1n) !== (bytes[0] & 1)) {
+        y = p - y;
+      }
+
+      const point = new Uint8Array(65);
+      point[0] = 0x04;
+      point.set(bytes.subarray(1), 1);
+      for (let i = 64; i > 32; i--, y >>= 8n) {
+        point[i] = Number(y & 0xffn);
+      }
+      return point;
+    }
+
+    /**
+     * Computes base^exponent mod modulus by square-and-multiply.
+     *
+     * @param base {bigint} - The base.
+     * @param exponent {bigint} - The exponent, zero or more.
+     * @param modulus {bigint} - The modulus.
+     * @returns {bigint} the result, from 0 to modulus - 1.
+     */
+    static #modPow(base, exponent, modulus) {
+      let result = 1n;
+      for (base %= modulus; exponent > 0n; exponent >>= 1n, base = base * base % modulus) {
+        if (exponent & 1n) {
+          result = result * base % modulus;
+        }
+      }
+      return result;
     }
 
     /**
@@ -2208,7 +2280,7 @@
     /**
      * Builds an instance of the Verifier from the raw key information read from the DNS.
      *
-     * @param rawPublicKey {string} - A key as published in the DNS record.
+     * @param rawPublicKey {string} - A key as published in the DNS record (base64url of the 65-byte uncompressed or the 33-byte compressed P-256 point).
      * @param [options={}] {object} - Key options as read from the DNS record that contained the rawPublicKey.
      * @param [context={}] {object} - Per-verification context. Unused by this verifier.
      * @param [config={}] {object} - Optional overrides for the global Triauth.config settings
@@ -2219,7 +2291,7 @@
       config = Helpers.mergeConfig(config);
 
       try {
-        const publicKey = (await crypto.subtle.importKey('raw', /** @type {BufferSource} */ (Helpers.base64UrlToUint8(rawPublicKey)), {
+        const publicKey = (await crypto.subtle.importKey('raw', /** @type {BufferSource} */ (Helpers.decodeP256PublicKey(Helpers.base64UrlToUint8(rawPublicKey))), {
           name: 'ECDSA',
           namedCurve: 'P-256',
           hash: 'SHA-256'
@@ -2361,6 +2433,19 @@
     static verifyAlgorithm = null;
 
     /**
+     * Returns the bytes of a publishable key in the form that the `raw` import of `importAlgorithm` accepts.
+     * Subclasses whose credential algorithm has more than one key form override it.
+     *
+     * @param rawPublicKey {string} - A key as published in the DNS record.
+     * @returns {Uint8Array} the key bytes.
+     *
+     * @throws {TypeError} when the key is not in a form that the credential algorithm accepts.
+     */
+    static publicKeyBytes(rawPublicKey) {
+      return Helpers.base64UrlToUint8(rawPublicKey);
+    }
+
+    /**
      * Constructs a new instance of verifier for the given public crypto key and options.
      *
      * @param publicKey {CryptoKey} - A public key in form of CryptoKey object.
@@ -2403,7 +2488,7 @@
       }
 
       try {
-        const publicKey = (await crypto.subtle.importKey('raw', /** @type {BufferSource} */ (Helpers.base64UrlToUint8(rawPublicKey)), importAlgorithm, true, ['verify']));
+        const publicKey = (await crypto.subtle.importKey('raw', /** @type {BufferSource} */ (this.publicKeyBytes(rawPublicKey)), importAlgorithm, true, ['verify']));
 
         return new this(publicKey, options, context, config);
 
@@ -2532,7 +2617,8 @@
    * A verifier for WebAuthn signatures backed by ECDSA P-256 (ES256) credentials.
    *
    * Shares all WebAuthn assertion validation with the WebAuthn base class; this subclass
-   * only binds the ES256 credential algorithm.
+   * only binds the ES256 credential algorithm. The publishable key is the 65-byte uncompressed
+   * or the 33-byte compressed P-256 point (see `Triauth.Helpers.decodeP256PublicKey`).
    *
    * @class
    * @memberof Triauth.Verifiers
@@ -2542,6 +2628,18 @@
 
     static importAlgorithm = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' };
     static verifyAlgorithm = { name: 'ECDSA', hash: 'SHA-256' };
+
+    /**
+     * Returns the publishable key as the 65-byte uncompressed P-256 point.
+     *
+     * @param rawPublicKey {string} - A key as published in the DNS record.
+     * @returns {Uint8Array} the 65-byte uncompressed point.
+     *
+     * @throws {TypeError} when the key is not an uncompressed or a compressed P-256 point.
+     */
+    static publicKeyBytes(rawPublicKey) {
+      return Helpers.decodeP256PublicKey(Helpers.base64UrlToUint8(rawPublicKey));
+    }
 
   }
 
@@ -5560,7 +5658,7 @@
    *       'not-a-robot': {
    *         label: 'I am not a robot',
    *         providers: [
-   *           'https://attest.triauthdemo.org/not-a-robot',
+   *           'https://attest.triauth.org/proof-of-work',
    *           'https://other-provider.example.com/i-am/not-a-robot'
    *         ]
    *       }
@@ -5628,25 +5726,25 @@
    * //     "not-a-robot": {
    * //       "valid": true,
    * //       "type": "attest",
-   * //       "identifier": "robot-attester@attest.triauthdemo.org",
-   * //       "identityDomain": "robot-attester._at.attest.triauthdemo.org",
+   * //       "identifier": "proof-of-work@attest.triauth.org",
+   * //       "identityDomain": "proof-of-work._at.attest.triauth.org",
    * //       "lookupCode": "",
    * //       "actor": "",
    * //       "actorIdentityDomain": "",
    * //       "actorLookupCode": "",
-   * //       "via": "https://attest.triauthdemo.org/not-a-robot",
+   * //       "via": "https://attest.triauth.org/proof-of-work",
    * //       "ver": 1,
    * //       "signedAt": 1787224768930,
    * //       "verifiedAt": 1787224773991,
    * //       "publicProfile": {
-   * //         "name": "Robot Checker"
+   * //         "name": "Proof Of Work"
    * //       },
    * //       "groups": [],
    * //       "deviceName": "server",
    * //       "deviceTag": "NOtejuAqKHSdgvKVpw57cU_Qipj6UKcz2nNiugx0l8g",
    * //       "keys": [
    * //         {
-   * //           "value": "BMR8Ug7qu9HUc9UgY_ADh8giBNmWBbSmGsR6DD6Hg5rpWeyYvu2WlQ43iR_dj0eKN99esQNMe7Gq2u2LBnRejcU",
+   * //           "value": "BAdEISRVd_8LuQe8SV6p-cDjW2t3PSa6NlRGIhfRflkvIA9rrNJWbsQllN56YpF2Q8AIHWrcWcR6hoSnXy7QLFM",
    * //           "options": {
    * //             "use": "attest",
    * //             "type": "es256"
@@ -5657,7 +5755,9 @@
    * //       ],
    * //       "secure": true,
    * //       "expires": 1787226573991,
-   * //       "signedMetadata": {},
+   * //       "signedMetadata": {
+   * //         "bits": 16
+   * //       },
    * //       "unsignedMetadata": {}
    * //     }
    * //   },
