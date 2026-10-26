@@ -1,5 +1,5 @@
 /*!
- * triauth-js v1.0.0-beta.3
+ * triauth-js v1.0.0-beta.4
  *
  * See https://www.triauth.org/ and https://github.com/triauth/triauth-js/ for more details.
  *
@@ -28,7 +28,7 @@
   /**
    * The global triauth-js configuration, exposed as `Triauth.config` and shared by reference with every internal module.
    * Each API method also takes a per-call override object as its last argument, and an unknown key in either place is
-   * rejected with error 103. The `logger` and `resolver` defaults are filled in by the entry module.
+   * rejected with the error `invalid_config`. The `logger` and `resolver` defaults are filled in by the entry module.
    * The global `config` object should not be mutated while API calls are in flight.
    *
    * @type {{
@@ -49,7 +49,7 @@
   const config = {
     // When true, all challenge-response API methods (authenticate, ping, attest, sign, stamp), Triauth.check,
     // and Triauth.verify require a successful result to be DNSSEC-secure: any otherwise-valid response that was
-    // not reported DNSSEC-validated (`secure !== true`) is rejected with error 404 ("Your domain does not
+    // not reported DNSSEC-validated (`secure !== true`) is rejected with the error `dnssec_required` ("Your domain does not
     // support DNSSEC, which is required to continue."). Leave false (default) to inspect the `secure` property yourself and stay
     // interoperable with non-DNSSEC domains; set true for mission-critical systems that demand strict
     // cryptographic assurance.
@@ -93,7 +93,7 @@
   /**
    * Frozen snapshot of the recognized `Triauth.config` keys, captured at module load.
    *
-   * The public API methods use this to reject config overrides that carry an unknown key (error 103).
+   * The public API methods use this to reject config overrides that carry an unknown key (error `invalid_config`).
    *
    * @type {ReadonlyArray<string>}
    */
@@ -208,23 +208,26 @@
   const ISSUES_URL = 'https://github.com/triauth/triauth-js/issues';
 
   /**
-   * The base error type used throughout triauth-js, carrying a numeric `code`, `message`, and `data`.
+   * The base error type used throughout triauth-js, carrying the `code`, `reason`, and `message` of the
+   * error object that Triauth API methods return, and `data` for the log entry.
    *
    * @class
    * @memberof Triauth
    */
   class TriauthError extends Error {
     /**
-     * @param code {number}                  - Numeric error code consulted by `TriauthError.process` to shape the response.
-     * @param message {string}               - Human-readable error message.
+     * @param error {{code: string, reason?: string, message: string}} - The error object returned by Triauth API methods: the error
+     *                                         code (e.g., `request_denied`), the reason (only on errors about one field, e.g., `too_long`),
+     *                                         and a human-readable message.
      * @param [data={}] {{cause?: *, [k: string]: *}} - Optional metadata; `cause` (if present) is forwarded to the `Error` constructor and stripped from `this.data`.
      */
-    constructor(code, message, data = {}) {
+    constructor({code, reason, message}, data = {}) {
       super(message, {cause: data.cause});
 
       this.name = this.constructor.name;
 
       this.code = code;
+      this.reason = reason;
       this.message = message;
 
       this.data = Object.assign({}, data);
@@ -234,42 +237,41 @@
     }
 
     /**
-     * Normalizes any thrown value into the `{error: {code, message}}` shape returned by Triauth API methods,
-     * and logs it via `config.logger`. Validation errors (code 200–299) are logged at `info`; other
-     * `TriauthError`s at `warn`. Anything else is an internal error (code 100) logged at `error`
-     * with the original error as `cause`.
+     * Normalizes any thrown value into the `{error: {code, reason?, message}}` shape returned by Triauth API methods,
+     * and logs it via `config.logger`. Validation errors (the errors about one field, which carry a `reason`) are
+     * logged at `info`; other `TriauthError`s at `warn`. Anything else is an internal error (`internal_error`) logged
+     * at `error` with the original error as `cause`.
      *
      * @param err {*} - The thrown value (typically a `TriauthError`, but anything is accepted).
      * @param config {object} - Effective per-call config; only `config.logger` is consulted here.
      *
-     * @returns {{error: {code: number, message: string}}}
+     * @returns {{error: {code: string, reason?: string, message: string}}}
      */
     static process(err, config) {
       if (err instanceof TriauthError) {
 
         // Validation errors are logged with info severity
-        if (err.code >= 200 && err.code < 300) {
+        if (err.reason !== undefined) {
           config.logger?.info?.(`Validation error - ${err.message} (${err.code})`, {cause:err});
         } else {
           config.logger?.warn?.(`${err.message} (${err.code})`, {cause:err});
         }
 
         return {
-          error: {
-            code: err.code,
-            message: err.message
-          }
+          error: (err.reason === undefined)
+            ? {code: err.code, message: err.message}
+            : {code: err.code, reason: err.reason, message: err.message}
         };
 
       } else {
         config.logger?.error?.(
-          `Internal error (100): this is a defect in triauth-js - please report it at ${ISSUES_URL} together with the stack trace`,
+          `Internal error: this is a defect in triauth-js - please report it at ${ISSUES_URL} together with the stack trace`,
           {cause: err}
         );
 
         return {
           error: {
-            code: 100,
+            code: 'internal_error',
             message: 'Internal error'
           }
         };
@@ -366,6 +368,7 @@
     static #NORMAL_STRING_REGEXP = /^[\p{L}\p{N} ~!@#$%^&*()_\-+={}[\]|\\:;"'<,>.?/]+$/u; // the Unicode property escape \p{L} matches any kind of letter from any language, \p{N} any number.
     static #UNPAIRED_SURROGATE_REGEXP = /\p{Cs}/u;                                // matches only UNPAIRED surrogates - the strings UTF-8 cannot encode.
     static #LOOKUP_CODE_REGEXP = /^[A-Z0-9]{16}$/;
+    static #PROTOTYPE_NAMES = ['__proto__', 'constructor', 'prototype'];          // the prototype-poisoning names, never a JSON member name
     static #P256_P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn; // the P-256 field prime p
     static #P256_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn; // the P-256 curve coefficient b (a = -3)
 
@@ -582,7 +585,7 @@
      * Encodes the passed string into base64url encoding of its UTF-8 bytes.
      *
      * Any well-formed string is encodable (emojis, non-latin scripts, etc.). Throws a TypeError
-     * on an unpaired surrogate — ill-formed UTF-16 has no UTF-8 encoding. Unreachable through
+     * on an unpaired surrogate — a surrogate code point has no UTF-8 encoding. Unreachable through
      * the protocol surface: every internal call site encodes JSON.stringify output, which
      * escapes unpaired surrogates.
      *
@@ -612,7 +615,7 @@
     /**
      * Encodes the passed string into its UTF-8 bytes.
      *
-     * Throws a TypeError on an unpaired surrogate — ill-formed UTF-16 has no UTF-8 encoding,
+     * Throws a TypeError on an unpaired surrogate — a surrogate code point has no UTF-8 encoding,
      * and substituting U+FFFD would let two distinct strings share one byte encoding (the
      * platform encoder substitutes, so the well-formedness gate lives here).
      *
@@ -626,7 +629,7 @@
       if (typeof s !== 'string') {
         throw new TypeError('stringToUtf8Bytes expects a string');
       }
-      if (Helpers.#UNPAIRED_SURROGATE_REGEXP.test(s)) {
+      if (!Helpers.isWellFormedString(s)) {
         throw new TypeError('Unpaired surrogate');
       }
 
@@ -691,6 +694,22 @@
       } catch {
         return null;
       }
+    }
+
+    /**
+     * Checks that the passed string carries no surrogate code point (U+D800 to U+DFFF), so that it has a UTF-8 encoding.
+     *
+     * Every string takes this check before it is encoded, and every string parsed from JSON text is held to
+     * the same rule: the `\uXXXX` escape of a surrogate is the one spelling of such a string that passes the
+     * strict UTF-8 decoder, because the JSON text itself is plain ASCII. The name mirrors the ES2024
+     * `String.prototype.isWellFormed`, which performs the same test.
+     *
+     * @param string {string} - A string to check.
+     *
+     * @returns {boolean} true if the value is a string without surrogate code points, false otherwise.
+     */
+    static isWellFormedString(string) {
+      return typeof string === 'string' && !Helpers.#UNPAIRED_SURROGATE_REGEXP.test(string);
     }
 
     /**
@@ -1203,15 +1222,21 @@
     }
 
     /**
-     * Parses the provided json text source and returns original object.
+     * Parses the provided JSON text and returns the object it encodes.
      *
-     * This method is a wrapper around the native JSON parser with some added security-focused validations and limits:
-     *   - accepts only source strings smaller than 256KB,
-     *   - ensures that the JSON encoded structure is an 'object',
-     *   - protects against prototype poisoning attacks,
-     *   - blocks non-ascii characters in property names,
-     *   - allows a maximal object nesting depth of 8 levels (the root object counts as depth 1),
-     *   - maximal key length of 256 characters.
+     * The native JSON parser reads the text, then one walk over the parsed value applies the rules below, so that
+     * a value which passes them reads the same in every language:
+     *   - the source is a string of at most 256KB, and its root is an object,
+     *   - a number is a whole number of magnitude at most 2^53 - 1 (`Number.isSafeInteger`), the range that every
+     *     JSON parser reads exactly: `1.0` and `1e2` are the whole numbers 1 and 100, while a fraction, a larger
+     *     integer or a literal that overflows to Infinity is rejected,
+     *   - a string carries no surrogate code point (the JSON escape of a surrogate is the one spelling of such a
+     *     string that passes the strict UTF-8 decoder),
+     *   - a member name is ASCII, at most 255 characters long, and never `__proto__`, `constructor` or `prototype`,
+     *   - objects and arrays nest at most 8 levels deep: the root object is level 1, and other values add no level.
+     *
+     * A member name that occurs twice in one object keeps its last value, as the native parser reads it, and the
+     * rules apply to that last value.
      *
      * @param source {string} - A source string that contains json encoded data.
      *
@@ -1235,64 +1260,52 @@
         throw err;
       }
 
-      const {
-        jsonMaxNestingDepth,
-        jsonMaxKeyLength
-      } = LIMITS;
-
-      // Keep track of nesting depth, capped at jsonMaxNestingDepth
-      let currentDepth = 0;
-
-      let queue = [jsonObject];
-
-      while (queue.length) {
-
-        if (jsonMaxNestingDepth && currentDepth >= jsonMaxNestingDepth) {
-          throw err;
-        }
-        currentDepth += 1;
-
-        let nodes = queue;
-        queue = [];
-
-        for (const node of nodes) {
-
-          if (node === undefined || node === null) {
-            continue;
-          }
-
-          // Defend against prototype poisoning
-          if (
-            Object.prototype.hasOwnProperty.call(node, '__proto__') ||
-            (
-              Object.prototype.hasOwnProperty.call(node, 'constructor') &&
-              Object.prototype.hasOwnProperty.call(node.constructor, 'prototype')
-            )
-          ) {
-            throw err;
-          }
-
-          for (const key in node) {
-
-            // Limit the maximal length of a key
-            if (key.length > jsonMaxKeyLength){
-              throw err;
-            }
-
-            // Do not accept non-ascii keys
-            // eslint-disable-next-line no-control-regex
-            if (/[^\x00-\x7F]/.test(key)){
-              throw err;
-            }
-
-            if (typeof node[key] === 'object') {
-              queue.push(node[key]);
-            }
-          }
-        }
+      if (!Helpers.#isBoundedJsonValue(jsonObject, 1)) {
+        throw err;
       }
 
       return jsonObject;
+    }
+
+    /**
+     * Checks one value produced by `JSON.parse`, and every value inside it, against the rules of `Helpers.safeParseJson`.
+     *
+     * The walk goes at most one level past the nesting limit, so its recursion depth stays bounded whatever the parser built.
+     *
+     * @param value {*} - A value produced by `JSON.parse`.
+     * @param depth {number} - The nesting level of the value if it is an object or an array (the root object is level 1).
+     *
+     * @returns {boolean} true if the value and every value inside it follow the rules, false otherwise.
+     */
+    static #isBoundedJsonValue(value, depth) {
+      if (typeof value === 'number') {
+        return Number.isSafeInteger(value);
+      }
+
+      if (typeof value === 'string') {
+        return Helpers.isWellFormedString(value);
+      }
+
+      // true, false and null add no nesting level
+      if (value === null || typeof value !== 'object') {
+        return true;
+      }
+
+      if (depth > LIMITS.jsonMaxNestingDepth) {
+        return false;
+      }
+
+      if (Array.isArray(value)) {
+        return value.every((item) => Helpers.#isBoundedJsonValue(item, depth + 1));
+      }
+
+      return Object.keys(value).every((name) => (
+        name.length <= LIMITS.jsonMaxKeyLength &&
+        // eslint-disable-next-line no-control-regex
+        !/[^\x00-\x7F]/.test(name) &&
+        !Helpers.#PROTOTYPE_NAMES.includes(name) &&
+        Helpers.#isBoundedJsonValue(value[name], depth + 1)
+      ));
     }
 
     /**
@@ -1355,6 +1368,14 @@
     }
   }
 
+  // The longest well-formed session key, `<domain>:<key>` with a domain of at most LIMITS.domainNameBytesize
+  // bytes and a 43-character key, and the longest well-formed device tag, `<grantTag>:<actorIdentifier>:<actorDeviceTag>`
+  // with two tag components of 43 + 1 + 16 characters around an identifier of at most LIMITS.identifierBytesize bytes.
+  // The validators compare the length against these caps ahead of any split, so the cost of a rejection does not
+  // grow with the input.
+  const SESSION_KEY_MAX_LENGTH = LIMITS.domainNameBytesize + 1 + 43;
+  const DEVICE_TAG_MAX_LENGTH = 2 * (43 + 1 + 16) + 2 + LIMITS.identifierBytesize;
+
   /**
    * A collection of helper methods dedicated for data validation.
    *
@@ -1366,80 +1387,97 @@
    */
   class Validator {
 
+    /**
+     * The message of every validation error, by error code and reason. Each code names the invalid field,
+     * and each reason names the rule that the field breaks.
+     */
     static #ERRORS = {
-      210: 'Identifier is invalid',
-      211: 'Identifier must not be empty',
-      212: 'Identifier is too long',
-      213: 'Identifier must be provided in lowercase',
-      214: 'Identifier must include one @ sign',
-      215: 'Identifier contains invalid username',
-      216: 'Identifier contains invalid domain name',
-      221: 'Invalid callbackUrl',
-      222: 'Invalid ext',
-      223: 'Invalid challenge',
-      224: 'Invalid response',
-      225: 'Invalid signature',
-      226: 'Invalid session key',
-      227: 'Invalid message',
-      228: 'Invalid attachments',
-      229: 'Invalid attestations',
-      260: 'Device name is invalid',
-      261: 'Device name must not be empty',
-      262: 'Device name is too long',
-      263: 'Device name must be provided in lowercase',
-      264: 'Device name must include only letters, numbers, and hyphens'
+      invalid_identifier: {
+        invalid: 'Identifier is invalid',
+        empty: 'Identifier must not be empty',
+        too_long: 'Identifier is too long',
+        not_lowercase: 'Identifier must be provided in lowercase',
+        invalid_format: 'Identifier must include one @ sign',
+        invalid_username: 'Identifier contains invalid username',
+        invalid_domain: 'Identifier contains invalid domain name'
+      },
+      invalid_callback_url: {invalid: 'Invalid callbackUrl'},
+      invalid_ext: {invalid: 'Invalid ext'},
+      invalid_challenge: {invalid: 'Invalid challenge'},
+      invalid_response: {invalid: 'Invalid response'},
+      invalid_signature: {invalid: 'Invalid signature'},
+      invalid_session_key: {invalid: 'Invalid session key'},
+      invalid_message: {invalid: 'Invalid message'},
+      invalid_attachments: {invalid: 'Invalid attachments'},
+      invalid_attestations: {invalid: 'Invalid attestations'},
+      invalid_lookup_code: {invalid: 'Invalid lookup code'},
+      invalid_device_tag: {invalid: 'Invalid device tag'},
+      invalid_device_name: {
+        invalid: 'Device name is invalid',
+        empty: 'Device name must not be empty',
+        too_long: 'Device name is too long',
+        not_lowercase: 'Device name must be provided in lowercase',
+        invalid_characters: 'Device name must include only letters, numbers, and hyphens'
+      },
+      invalid_group_name: {
+        invalid: 'Group name is invalid',
+        empty: 'Group name must not be empty',
+        too_long: 'Group name is too long',
+        not_lowercase: 'Group name must be provided in lowercase',
+        invalid_characters: 'Group name must include only letters, numbers, and hyphens'
+      }
     };
 
-    static #expandResult(errors) {
-      // expand errors
-      errors = errors.map((errno) => {
-        return {
-          code: errno,
-          message: this.#ERRORS[errno]
-        };
-      });
-
+    /**
+     * Builds a validation result from the reasons found for one field.
+     *
+     * @param code {string} - The error code of the field (e.g., `invalid_identifier`).
+     * @param reasons {Array<string>} - The reasons found, empty when the field is valid.
+     *
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
+     */
+    static #expandResult(code, reasons) {
       return {
-        valid: errors.length === 0,
-        errors
+        valid: reasons.length === 0,
+        errors: reasons.map((reason) => ({code, reason, message: this.#ERRORS[code][reason]}))
       };
-    };
+    }
 
     /**
      * Validates the provided personal identifier's format, and returns human-friendly error messages if problems are found.
      *
      * @param identifier {String} - Identifier that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateIdentifier(identifier) {
       if (typeof identifier !== 'string') {
-        return this.#expandResult([210]); // 'Identifier is invalid'
+        return this.#expandResult('invalid_identifier', ['invalid']);
       }
 
       if (identifier.length <= 0) {
-        return this.#expandResult([211]); // 'Identifier must not be empty'
+        return this.#expandResult('invalid_identifier', ['empty']);
       }
 
       if (identifier.length > LIMITS.identifierBytesize || Helpers.byteSize(identifier) > LIMITS.identifierBytesize) {
-        return this.#expandResult([212]); // 'Identifier is too long'
+        return this.#expandResult('invalid_identifier', ['too_long']);
       }
 
       // identifiers must not contain any whitespace characters and/or NULL
       if (identifier.match(/[\s\0]/g)) {
-        return this.#expandResult([210]); // 'Identifier is invalid'
+        return this.#expandResult('invalid_identifier', ['invalid']);
       }
 
       if (identifier !== identifier.toLowerCase()) {
-        return this.#expandResult([213]); // Identifier must be provided in lowercase
+        return this.#expandResult('invalid_identifier', ['not_lowercase']);
       }
 
       if ((identifier.match(/@/g) || []).length !== 1) {
-        return this.#expandResult([214]); // 'Identifier must include one @ sign'
+        return this.#expandResult('invalid_identifier', ['invalid_format']);
       }
 
       const [username, domain] = identifier.split('@');
-      const errors = [];
+      const reasons = [];
 
       if (
         // Username may be composed only of ASCII letters, numbers, dot and hyphen signs, must start with a letter or a digit,
@@ -1452,16 +1490,16 @@
         // and it must not end with a dot or hyphen.
         username.match(/[.-]$/i)
       ) {
-        errors.push(215); // 'Invalid username'
+        reasons.push('invalid_username');
       }
 
       if (
         !Helpers.isDomainName(domain)
       ) {
-        errors.push(216); // 'Invalid domain name',
+        reasons.push('invalid_domain');
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_identifier', reasons);
     }
 
     /**
@@ -1469,25 +1507,27 @@
      *
      * @param callbackUrl {String} - Callback URL that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateCallbackUrl(callbackUrl) {
-      const errors = [];
+      const reasons = [];
 
       // A callback URL is any canonical URL — http or https, named or IPv4-literal host — whose
       // base URL is free of the signature-envelope delimiter ';'
       const base = Helpers.getBaseUrl(callbackUrl);
       if (base === false || base.includes(DELIMITER)) {
-        errors.push(221);
+        reasons.push('invalid');
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_callback_url', reasons);
     }
 
     /**
      * Validates the optional `ext` property for {@link Triauth.authenticate} — both as supplied in stage 1 and as received back in stage 3.
      *
-     * `ext` must be a plain object whose values are strings, numbers, booleans, or plain objects one level deep (no arrays, no deeper nesting).
+     * `ext` must be a plain object whose values are strings, whole numbers, booleans, or plain objects one level deep (no arrays, no deeper nesting).
+     * A string value carries no unpaired surrogate and a number is a whole number of magnitude at most 2^53 - 1, the rules that
+     * `Helpers.safeParseJson` applies to every JSON value when the ext comes back in stage 3.
      * Keys must additionally be ASCII-only — `Helpers.safeParseJson` rejects non-ASCII property names when the ext round-trips back in stage 3 —
      * and never one of the prototype-poisoning names (`__proto__`, `constructor`, `prototype`)
      *
@@ -1495,20 +1535,20 @@
      * @param [depth=0] {number} - Nesting depth of the object being validated: 0 for the `ext` object itself,
      *                             1 for the single level of nested plain objects that `ext` values may contain.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateExt(ext, depth=0) {
-      const errors = [];
+      const reasons = [];
 
       if (
         !ext ||
-        !(typeof ext === 'object' && !Array.isArray(ext) && Object.keys(ext).every((k) => Helpers.isNormalString(k, LIMITS.jsonMaxKeyLength) && !/[^\x20-\x7E]/.test(k) && ['__proto__', 'constructor', 'prototype'].indexOf(k) < 0) && Object.values(ext).every((e) => typeof e === 'string' || typeof e === 'number' || typeof e === 'boolean' || (depth === 0 && this.validateExt(e, depth + 1).errors.length === 0))) ||
+        !(typeof ext === 'object' && !Array.isArray(ext) && Object.keys(ext).every((k) => Helpers.isNormalString(k, LIMITS.jsonMaxKeyLength) && !/[^\x20-\x7E]/.test(k) && ['__proto__', 'constructor', 'prototype'].indexOf(k) < 0) && Object.values(ext).every((e) => (typeof e === 'string' && Helpers.isWellFormedString(e)) || Number.isSafeInteger(e) || typeof e === 'boolean' || (depth === 0 && this.validateExt(e, depth + 1).errors.length === 0))) ||
         Helpers.byteSize(JSON.stringify(ext)) > LIMITS.extBytesize
       ) {
-        errors.push(222);
+        reasons.push('invalid');
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_ext', reasons);
     }
 
     /**
@@ -1516,32 +1556,33 @@
      *
      * `attestations` must be a plain object keyed by attestation name, where each value is `{label: string, providers: string[]}`.
      * An empty object `{}` is valid; passing it will produce `{attested: true, attestations: {}}` from stage 3.
-     * An attestation name is never one of the prototype-poisoning keys (`__proto__`, `constructor`, `prototype`).
+     * An attestation name is printable ASCII, as it becomes a property name of the challenge that `Helpers.safeParseJson` admits only in ASCII in stage 3,
+     * and never one of the prototype-poisoning keys (`__proto__`, `constructor`, `prototype`).
      *
      * @param attestations {Object} - Attestations object that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateAttestations(attestations) {
-      const errors = [];
+      const reasons = [];
 
       if (
         !attestations ||
         !(typeof attestations === 'object' && !Array.isArray(attestations)) ||
-        !(Object.keys(attestations).every((k) => Helpers.isNormalString(k) && ['__proto__', 'constructor', 'prototype'].indexOf(k) < 0))
+        !(Object.keys(attestations).every((k) => Helpers.isNormalString(k) && !/[^\x20-\x7E]/.test(k) && ['__proto__', 'constructor', 'prototype'].indexOf(k) < 0))
         ) {
-        return this.#expandResult([229]);
+        return this.#expandResult('invalid_attestations', ['invalid']);
       }
 
       // The multi-signature envelope holds at most maxMultiSignatures entries (1 user + N attesters),
       // so requesting more than (maxMultiSignatures - 1) attestations creates a request that can never be satisfied.
       if (Object.keys(attestations).length > LIMITS.maxMultiSignatures - 1) {
-        return this.#expandResult([229]);
+        return this.#expandResult('invalid_attestations', ['invalid']);
       }
 
       for (const entry of Object.values(attestations)) {
         if(
-          !(typeof entry === 'object' && !Array.isArray(entry)) ||
+          !(entry !== null && typeof entry === 'object' && !Array.isArray(entry)) ||
           !(Object.keys(entry).every((k) => ['label', 'providers'].indexOf(k) >= 0)) ||
           !(Helpers.isNormalString(entry.label)) ||
           !(
@@ -1550,7 +1591,7 @@
             entry.providers.every((pUrl) => Helpers.isSecureUrl(pUrl))
           )
         ) {
-          errors.push(229);
+          reasons.push('invalid');
 
         } else {
           for (const providerUrl of entry.providers) {
@@ -1561,13 +1602,13 @@
             // as the query/fragment introducers and '%' only in an escape — one charset test
             // covers every excluded character.
             if (/[?#%;']/.test(providerUrl)) {
-              errors.push(229);
+              reasons.push('invalid');
             }
           }
         }
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_attestations', reasons);
     }
 
     /**
@@ -1577,10 +1618,10 @@
      *
      * @param challenge {String} - Challenge string that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateChallenge(challenge) {
-      const errors = [];
+      const reasons = [];
 
       if (
         typeof challenge !== 'string' ||
@@ -1589,10 +1630,10 @@
         Helpers.byteSize(challenge) > LIMITS.challengeBytesize ||
         !Helpers.isBase64UrlString(challenge)
       ) {
-        errors.push(223);
+        reasons.push('invalid');
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_challenge', reasons);
     }
 
     /**
@@ -1602,10 +1643,10 @@
      *
      * @param response {String} - Response string that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateResponse(response) {
-      const errors = [];
+      const reasons = [];
 
       if (
         typeof response !== 'string' ||
@@ -1614,10 +1655,10 @@
         response.length > LIMITS.signatureBytesize ||
         Helpers.byteSize(response) > LIMITS.signatureBytesize
       ) {
-        errors.push(224);
+        reasons.push('invalid');
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_response', reasons);
     }
 
     /**
@@ -1628,10 +1669,10 @@
      *
      * @param response {String} - Sealed response that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateSealedResponse(response) {
-      const errors = [];
+      const reasons = [];
       const maxLength = 87 + 1 + Math.ceil((LIMITS.signatureBytesize + 16) * 4 / 3);
 
       if (
@@ -1639,10 +1680,10 @@
         response.length > maxLength ||
         !/^[A-Za-z0-9_-]{87}\.[A-Za-z0-9_-]{22,}$/.test(response)
       ) {
-        errors.push(224);
+        reasons.push('invalid');
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_response', reasons);
     }
 
     /**
@@ -1650,16 +1691,16 @@
      *
      * @param message {String} - Message that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateMessage(message) {
-      const errors = [];
+      const reasons = [];
 
       if (!Helpers.isNormalString(message, LIMITS.messageBytesize)) {
-        errors.push(227);
+        reasons.push('invalid');
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_message', reasons);
     }
 
     /**
@@ -1677,10 +1718,10 @@
      * @param attachments {Array<{name: string, sourceUrl?: string, sha256: string}>} - Attachments array that should be validated.
      * @param [requireSourceUrl=true] {boolean} - Whether a valid `sourceUrl` is mandatory on every entry.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateAttachments(attachments, requireSourceUrl = true) {
-      const errors = [];
+      const reasons = [];
       const seenNames = Object.create(null);
 
       if (
@@ -1694,10 +1735,10 @@
           (!seenNames[f.name] && (seenNames[f.name] = true))
         )
       ) {
-        errors.push(228);
+        reasons.push('invalid');
       }
 
-      return this.#expandResult(errors);
+      return this.#expandResult('invalid_attachments', reasons);
     }
 
     /**
@@ -1719,13 +1760,13 @@
      *
      * @param signedMetadata {object} - The signed metadata of a signature segment.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
-     *          Invalid (225) when `bind` is present but is not an object of at least one recognized
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
+     *          Invalid (`invalid_signature`) when `bind` is present but is not an object of at least one recognized
      *          binder with a string value.
      */
     static validateBinders(signedMetadata) {
       if (Object.keys(signedMetadata).indexOf('bind') < 0) {
-        return this.#expandResult([]); // a signature that binds nothing is valid - attesters attest anonymously
+        return this.#expandResult('invalid_signature', []); // a signature that binds nothing is valid - attesters attest anonymously
       }
 
       const bind = signedMetadata.bind;
@@ -1736,10 +1777,10 @@
         binders.length < 1 ||
         !binders.every((binder) => this.BINDER_NAMES.indexOf(binder) >= 0 && typeof bind[binder] === 'string')
       ) {
-        return this.#expandResult([225]);
+        return this.#expandResult('invalid_signature', ['invalid']);
       }
 
-      return this.#expandResult([]);
+      return this.#expandResult('invalid_signature', []);
     }
 
     /**
@@ -1750,10 +1791,10 @@
      *
      * @param sessionKey {String} - Session key that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateSessionKey(sessionKey) {
-      const parts = typeof sessionKey === 'string' ? sessionKey.split(':') : [];
+      const parts = typeof sessionKey === 'string' && sessionKey.length <= SESSION_KEY_MAX_LENGTH ? sessionKey.split(':') : [];
       const [domain, key] = parts.length === 2 ? parts : [null, parts[0]];
 
       if (
@@ -1761,17 +1802,17 @@
         (domain !== null && !(Helpers.isDomainName(domain) && domain === domain.toLowerCase())) ||
         key.length !== 43 || !Helpers.isBase64UrlString(key)
       ) {
-        return this.#expandResult([226]);
+        return this.#expandResult('invalid_session_key', ['invalid']);
       }
 
       // The canonical base64url of 32 bytes has no data in the unused bits of its last character
       try {
         Helpers.base64UrlToUint8(key);
       } catch {
-        return this.#expandResult([226]);
+        return this.#expandResult('invalid_session_key', ['invalid']);
       }
 
-      return this.#expandResult([]);
+      return this.#expandResult('invalid_session_key', []);
     }
 
     /**
@@ -1782,41 +1823,141 @@
      *
      * @param deviceName {String} - Device name that should be validated.
      *
-     * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
      */
     static validateDeviceName(deviceName) {
-      const errors = [];
+      return this.#expandResult('invalid_device_name', this.#nameErrors(deviceName));
+    }
 
-      if (typeof deviceName !== 'string') {
-        return this.#expandResult([260]); // 'Device name is invalid'
+    /**
+     * Validates the provided group name's format, and returns human-friendly error messages if problems are found.
+     *
+     * Group names follow the device-name grammar: lowercase letters, numbers, and single hyphens between alphanumerics
+     * (no leading, trailing, or consecutive hyphens), within the allowed byte size. The name is the bare name as published
+     * in a `groups` record (e.g., `admins`), not the fully-qualified form found in results (e.g., `admins@example.com`).
+     *
+     * @param groupName {String} - Group name that should be validated.
+     *
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
+     */
+    static validateGroupName(groupName) {
+      return this.#expandResult('invalid_group_name', this.#nameErrors(groupName));
+    }
+
+    /**
+     * Validates the provided lookup code's format.
+     *
+     * A lookup code is exactly 16 uppercase letters and digits (e.g., `K7QJ3FB9M2WZX0C4`). It addresses the records
+     * of an identity under a `mode=private` domain.
+     *
+     * @param lookupCode {String} - Lookup code that should be validated.
+     *
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
+     */
+    static validateLookupCode(lookupCode) {
+      const reasons = [];
+
+      if (!Helpers.isLookupCode(lookupCode)) {
+        reasons.push('invalid');
       }
 
-      if (deviceName.length <= 0) {
-        errors.push(261); // 'Device name must not be empty'
+      return this.#expandResult('invalid_lookup_code', reasons);
+    }
+
+    /**
+     * Validates the provided device tag's format.
+     *
+     * A device tag is the `deviceTag` of a result: a 43-character base64url digest (e.g., `3bi5oE_jXyjGY0WY5n6YqOuzRxfo40fuqDmLGaA5bKQ`),
+     * suffixed with `~` and a lookup code under a `mode=private` domain. After a delegated sign-in it is
+     * `<grantTag>:<actorIdentifier>:<actorDeviceTag>`, and each of its two tags may carry such a suffix.
+     *
+     * @param deviceTag {String} - Device tag that should be validated.
+     *
+     * @returns {{valid: boolean, errors: Array<{code: string, reason: string, message: string}>}}
+     */
+    static validateDeviceTag(deviceTag) {
+      const reasons = [];
+      const parts = typeof deviceTag === 'string' && deviceTag.length <= DEVICE_TAG_MAX_LENGTH ? deviceTag.split(':') : [];
+
+      if (
+        !(parts.length === 1 && this.#isReportedTag(parts[0])) &&
+        !(parts.length === 3 && this.#isReportedTag(parts[0]) && this.validateIdentifier(parts[1]).valid && this.#isReportedTag(parts[2]))
+      ) {
+        reasons.push('invalid');
       }
 
-      if (deviceName.length > LIMITS.deviceNameBytesize || Helpers.byteSize(deviceName) > LIMITS.deviceNameBytesize) {
-        return this.#expandResult([262]); // 'Device name is too long'
+      return this.#expandResult('invalid_device_tag', reasons);
+    }
+
+    /**
+     * Checks one tag component of a device tag: a 43-character base64url digest, optionally suffixed with `~` and a lookup code.
+     *
+     * @param component {string} - Tag component that should be checked.
+     *
+     * @returns {boolean} true when the component is a well-formed tag
+     */
+    static #isReportedTag(component) {
+      const [tag, lookupCode, ...rest] = component.split('~');
+
+      if (rest.length > 0 || tag.length !== 43 || (lookupCode !== undefined && !Helpers.isLookupCode(lookupCode))) {
+        return false;
       }
 
-      // deviceName must not contain any whitespace characters and/or NULL
-      if (deviceName.match(/[\s\0]/g)) {
-        errors.push(260); // 'Device name is invalid'
+      // The canonical base64url of a 32-byte digest has no data in the unused bits of its last character
+      try {
+        Helpers.base64UrlToUint8(tag);
+      } catch {
+        return false;
       }
 
-      if (deviceName !== deviceName.toLowerCase()) {
-        errors.push(263); // Device name must be provided in lowercase
+      return true;
+    }
+
+    /**
+     * Checks a name against the device-name grammar, shared by device names and group names.
+     *
+     * @param name {*} - Name that should be validated.
+     *
+     * @returns {Array<string>} The reasons found, empty when the name is valid.
+     */
+    static #nameErrors(name) {
+      const reasons = [];
+
+      if (typeof name !== 'string') {
+        return ['invalid'];
+      }
+
+      if (name.length <= 0) {
+        reasons.push('empty');
+      }
+
+      if (name.length > LIMITS.deviceNameBytesize || Helpers.byteSize(name) > LIMITS.deviceNameBytesize) {
+        return ['too_long'];
+      }
+
+      // The name must not contain any whitespace characters and/or NULL
+      if (name.match(/[\s\0]/g)) {
+        reasons.push('invalid');
+      }
+
+      if (name !== name.toLowerCase()) {
+        reasons.push('not_lowercase');
       }
 
       // Lowercase alphanumerics joined by single hyphens: the name must start and end on an alphanumeric
       // and carry no consecutive hyphens.
-      if (!deviceName.match(/^[a-z0-9]+(-[a-z0-9]+)*$/)) {
-        errors.push(264);
+      if (!name.match(/^[a-z0-9]+(-[a-z0-9]+)*$/)) {
+        reasons.push('invalid_characters');
       }
 
-      return this.#expandResult(errors);
+      return reasons;
     }
   }
+
+  // The option keys the `triauth` record defines. The endpoint keeps these and the `x-` extensions and ignores
+  // every other option of the record, so a record that spells a future option still configures a verifier that
+  // predates it, and no other published name reaches a result.
+  const ENDPOINT_OPTIONS = Object.freeze(['mode', 'include']);
 
   /**
    * Holds information about authentication endpoint for a given domain.
@@ -1859,7 +2000,8 @@
       this.host = null;
 
       /**
-       * The options as read from the `triauth` DNS record, with defaults filed in if missing.
+       * The `mode` and `include` options as read from the `triauth` DNS record, with the defaults filled in when
+       * absent, and its `x-` extension options as published. Every other option of the record is ignored.
        * Empty until resolved.
        * @type {object}
        */
@@ -1882,6 +2024,26 @@
       this.expires = undefined;
 
       this.resolved = undefined;
+    }
+
+    /**
+     * Keeps the options the `triauth` record defines, `mode` and `include`, and its `x-` extensions, and
+     * leaves every other option of the record out.
+     *
+     * @param options {object} - The options of the record, as parsed.
+     *
+     * @returns {object} the kept options, in a map without a prototype.
+     */
+    static knownOptions(options) {
+      const known = Object.create(null);
+
+      for (const [key, value] of Object.entries(options)) {
+        if (ENDPOINT_OPTIONS.includes(key) || (key[0] === 'x' && key[1] === '-')) {
+          known[key] = value;
+        }
+      }
+
+      return known;
     }
 
     /**
@@ -1943,7 +2105,7 @@
               }
 
               this.host = entry.value.toLowerCase();
-              this.options = entry.options;
+              this.options = AuthenticationEndpoint.knownOptions(entry.options);
               this.secure = !!entry.dnssec;
               this.expires = Number.isInteger(entry.ttl) ? Date.now() + entry.ttl * 1000 : undefined;
 
@@ -2729,8 +2891,9 @@
      * @returns {Promise<boolean>} true when key was successfully added, false if there are problems with the key structure (e.g., invalid group index)
      */
     async add(keyData, options = {}, keyMetadata = {}) {
-      // Work on a private copy of `options`
-      options = Object.assign({}, options);
+      // Work on a private copy of `options`. A spread copies an own `__proto__` key as data, so the options
+      // schema below judges it like any other unknown option
+      options = {...options};
 
       const matchData = keyData.match(/^(?<deviceName>[a-z0-9-]{1,20})\[(?<keyIdx>[0-9]{1,6})\/(?<keyCount>[0-9]{1,6})\]:(?<keyVal>\S+)$/);
 
@@ -3025,8 +3188,9 @@
      * @returns {Promise<boolean>} true when the include was successfully added, false when it was ignored (e.g., unrecognized ref or options, or the `LIMITS.maxIncludes` cap was exceeded)
      */
     async add(value, options = {}, metadata = {}) {
-      // Work on a private copy of `options`
-      options = Object.assign({}, options);
+      // Work on a private copy of `options`. A spread copies an own `__proto__` key as data, so the options
+      // schema below judges it like any other unknown option
+      options = {...options};
 
       // Normalize value to downcase
       value = Helpers.asciiLowercase(String(value));   // ASCII-only: a non-ASCII uppercase letter must fail the ref grammar, not fold into it
@@ -3239,7 +3403,7 @@
       // Ensure received identifier is valid
       const validationResult = Validator.validateIdentifier(this.identifier);
       if (!validationResult.valid) {
-        throw new TriauthError(validationResult.errors[0].code, validationResult.errors[0].message);
+        throw new TriauthError(validationResult.errors[0]);
       }
 
       /**
@@ -3360,7 +3524,7 @@
 
               // Group names follow the device-name grammar; a record with any malformed name is ignored as a whole, never repaired.
               const names = Helpers.asciiLowercase(entry.value).split(',');
-              if (!names.every((name) => Validator.validateDeviceName(name).valid)) {
+              if (!names.every((name) => Validator.validateGroupName(name).valid)) {
                 this.config.logger?.debug?.('Ignoring groups record with a malformed group name', {identifier:this.identifier});
                 continue;
               }
@@ -3640,7 +3804,7 @@
      * @param rawData {string} - the wrapped signature envelope.
      * @param [config={}] {object} - optional overrides for the global Triauth.config settings.
      *
-     * @throws {TriauthError} code 225 when the envelope or any of its fields is malformed.
+     * @throws {TriauthError} `invalid_signature` when the envelope or any of its fields is malformed.
      */
     constructor(rawData, config={}) {
       this.config = Helpers.mergeConfig(config);
@@ -3653,7 +3817,7 @@
         Helpers.byteSize(rawData) > LIMITS.signatureBytesize ||
         rawData.split(WRAPPER).length  !== 3
       ) {
-        throw new TriauthError(225, 'Invalid signature');
+        throw new TriauthError({code: 'invalid_signature', reason: 'invalid', message: 'Invalid signature'});
       }
 
       /** The wrapped signature envelope this instance was parsed from. */
@@ -3695,7 +3859,7 @@
         this.cryptoSignatures.length < 1 || // there must be at least one crypto signature
         this.cryptoSignatures.some((cs) => cs.length < 1 || !Helpers.isBase64UrlString(cs))
       ) {
-        throw new TriauthError(225, 'Invalid signature');
+        throw new TriauthError({code: 'invalid_signature', reason: 'invalid', message: 'Invalid signature'});
       }
 
       // Parse the numeric properties from envelope - they have been pre-checked with regexp
@@ -3709,7 +3873,7 @@
         /** The decoded metadata NOT covered by the crypto signatures; `{}` when the envelope carries none. */
         this.unsignedMetadata = this.encodedUnsignedMetadata ? this.decodeMetadata(this.encodedUnsignedMetadata) : {};
       } catch (err) {
-        throw new TriauthError(225, 'Invalid signature', {cause: err});
+        throw new TriauthError({code: 'invalid_signature', reason: 'invalid', message: 'Invalid signature'}, {cause: err});
       }
     }
 
@@ -3779,7 +3943,7 @@
      *          signedMetadata - an object, containing any additional data that is covered by the embedded crypto signatures,
      *          unsignedMetadata - an object, containing data that for various reasons was not covered by the embedded crypto signatures, but may be needed to verify it
      *
-     * @throws {TriauthError} code 110 when DNS resolution of the signer's identity fails - intentionally propagated so that API methods report a retryable error instead of a false "signature invalid" verdict
+     * @throws {TriauthError} `dns_unavailable` when DNS resolution of the signer's identity fails - intentionally propagated so that API methods report a retryable error instead of a false "signature invalid" verdict
      */
     async verify(message, constraints = {}) {
 
@@ -3805,7 +3969,7 @@
       }
 
       // 3-state return contract (shared by Signature/MultiSignature/Response.verify and relied on by
-      // every API method to choose between a 402 "expired" and a 401 "invalid"):
+      // every API method to choose between request_expired ("expired") and verification_failed ("invalid")):
       //   - a result object => success
       //   - `null`          => time-related failure ("expired")
       //   - `false`         => any other failure ("invalid")
@@ -3856,7 +4020,7 @@
 
       // Attempt to resolve identity records of the identifier. A definitive negative (domain not
       // configured for triauth, or no identity records published) fails the verification. A thrown
-      // resolution error (e.g., TriauthError 110 on DNS failure) intentionally propagates instead.
+      // resolution error (e.g., TriauthError dns_unavailable on DNS failure) intentionally propagates instead.
       if (!(await signerIdentity.resolve())) {
         this.config.logger?.debug?.('Identifier does not exist or is not configured for triauth');
         return false;
@@ -3974,7 +4138,7 @@
      *                           and delimited by, the `|` character.
      * @param [config={}] {object} - Optional overrides for the global Triauth.config settings
      *
-     * @throws {TriauthError} code 225 when the envelope is not a string, is not `|`-wrapped, exceeds
+     * @throws {TriauthError} `invalid_signature` when the envelope is not a string, is not `|`-wrapped, exceeds
      *                        `LIMITS.signatureBytesize`, carries more than `LIMITS.maxMultiSignatures`
      *                        segments, or repeats a byte-identical segment.
      */
@@ -3988,7 +4152,7 @@
         (rawData[0] !== WRAPPER || rawData[rawData.length - 1] !== WRAPPER) ||
         Helpers.byteSize(rawData) > LIMITS.signatureBytesize
       ) {
-        throw new TriauthError(225, 'Invalid signature');
+        throw new TriauthError({code: 'invalid_signature', reason: 'invalid', message: 'Invalid signature'});
       }
 
       this.rawData = rawData;
@@ -3997,12 +4161,12 @@
 
       const {maxMultiSignatures} = LIMITS;
       if (segments.length < 1 || segments.length > maxMultiSignatures) {
-        throw new TriauthError(225, 'Invalid signature');
+        throw new TriauthError({code: 'invalid_signature', reason: 'invalid', message: 'Invalid signature'});
       }
 
       // Do not allow byte-identical duplicate segments
       if (new Set(segments).size !== segments.length) {
-        throw new TriauthError(225, 'Invalid signature');
+        throw new TriauthError({code: 'invalid_signature', reason: 'invalid', message: 'Invalid signature'});
       }
 
       // Extract and parse signature segments
@@ -4142,8 +4306,8 @@
      *                                not the cryptographic input to verification.
      * @param [constraints={}] {object}             - Optional constraints that the response must satisfy:
      * @param [constraints.identifier] {string}     - If given, must match the identifier embedded in the challenge.
-     * @param [constraints.notBefore] {number}      - If given, the challenge `iat` must be >= this timestamp.
-     * @param [constraints.notAfter] {number}       - If given, the challenge `iat` must be <= this timestamp.
+     * @param [constraints.notBefore] {number}      - If given, the challenge `iat` and the signature timestamp must be >= this timestamp. The check allows for clock drift.
+     * @param [constraints.notAfter] {number}       - If given, the challenge `iat` and the signature timestamp must be <= this timestamp. The check allows for clock drift.
      * @param [constraints.minSignatures] {number}  - If given, the multi-signature envelope must contain at least this many signatures.
      * @param [constraints.maxSignatures] {number}  - If given, the multi-signature envelope must contain at most this many signatures.
      *
@@ -4662,9 +4826,10 @@
      *
      * @param type {string} - Flow type: `'auth'`, `'ping'`, `'attest'`, `'sign'`, or `'stamp'`.
      * @param [options={}] {object} - User-facing options. Stage 1 expects `{identifier, callbackUrl, ext?, sessionKey?}`
-     *                                 (`sessionKey` is required for every flow except `'auth'`, where it is rejected). Stage 3 expects
-     *                                 `{challenge, response, identifier?, callbackUrl?}` (the optional ones, if
-     *                                 provided, are additionally checked against the values embedded in the challenge).
+     *                                 plus the flow's own options (`sessionKey` is required for every flow except `'auth'`,
+     *                                 where it is rejected). Stage 3 expects `{challenge, response, identifier?, callbackUrl?}`
+     *                                 (the optional ones, if provided, are additionally checked against the values embedded
+     *                                 in the challenge) and rejects every other option as unrecognized.
      * @param [callbacks] {{onChallenge: function, onResponse: function}} -
      *        `onChallenge({challenge})` runs after the `Triauth.Challenge` is built (stage 1), giving the caller
      *        a chance to populate `challenge.data` (e.g., `msg`, `attest`, `attachments`).
@@ -4672,35 +4837,39 @@
      *        success object, `null` for expired-style failures, or `false` for generic verification failures.
      *        `sessionKey` is the session key from opening the sealed response (see `ResponseCipher.open`).
      * @param [config={}] {object} - Optional overrides for the global Triauth.config settings.
+     * @param [flowOptions=[]] {Array<string>} - Names of the flow's own stage-1 options (e.g., `message`), which `onChallenge`
+     *                                           reads from `options` and which stage 3 rejects like any unrecognized option.
      *
-     * @returns {Promise<{challenge: string, redirectUrl: string}|{error: {code: number, message: string}}|*>}
+     * @returns {Promise<{challenge: string, redirectUrl: string}|{error: {code: string, reason?: string, message: string}}|*>}
      *          A promise resolving to `{challenge, redirectUrl}` (stage 1), whatever `onResponse` returned
      *          (stage 3 success), or `{error:{code,message}}` if any error was caught. When
      *          `config.requireSecure` is set, a stage-3 result that is not DNSSEC-secure is rejected with
-     *          `{error:{code:404,…}}` instead of being returned (see `assertSecure`).
+     *          `{error:{code:'dnssec_required',…}}` instead of being returned (see `assertSecure`).
      */
-    static async perform(type, options={}, callbacks={onChallenge:null, onResponse:null}, config={}) {
+    static async perform(type, options={}, callbacks={onChallenge:null, onResponse:null}, config={}, flowOptions=[]) {
       config.logger?.info?.('Processing Triauth.' + type);
       const ts = Helpers.now();
 
       try {
 
-        // Ensure only recognized options are present to help avoid misspellings.
-        // `sessionKey` is only meaningful for the flows that follow a sign-in (ping/attest/sign/stamp), not for auth.
-        const allowedOptions = ['identifier', 'callbackUrl', 'challenge', 'response', 'ext'];
-        if (type !== 'auth') {
-          allowedOptions.push('sessionKey');
-        }
+        // Ensure only recognized options are present to help avoid misspellings. Stage 3 reads the challenge and the
+        // response, and cross-checks an identifier and a callbackUrl against the challenge. Every other option shapes
+        // the challenge at stage 1: `ext`, the flow's own options, and `sessionKey` for the flows that follow a sign-in
+        // (ping/attest/sign/stamp), not for auth.
+        const stage3 = options !== null && typeof options === 'object' && options.challenge != null && options.response != null;
+        const allowedOptions = stage3
+          ? ['challenge', 'response', 'identifier', 'callbackUrl']
+          : ['identifier', 'callbackUrl', 'challenge', 'response', 'ext', ...flowOptions, ...(type !== 'auth' ? ['sessionKey'] : [])];
 
         if (!Helpers.hasOnlyKnownProperties(options, allowedOptions)) {
-          throw new TriauthError(102, 'Unrecognized function argument');
+          throw new TriauthError({code: 'invalid_arguments', message: 'Unrecognized function argument'});
         }
 
         // Reject config overrides carrying unknown keys (typos that would otherwise be silently ignored,
         // sometimes weakening security - e.g. a misspelled `requireSecure`). We validate the MERGED config,
         // so a stray key is caught whether it came from this call's override or a global Triauth.config
         if (!Helpers.hasOnlyKnownProperties(config, KNOWN_CONFIG_KEYS)) {
-          throw new TriauthError(103, 'Unrecognized configuration key');
+          throw new TriauthError({code: 'invalid_config', message: 'Unrecognized configuration key'});
         }
 
         // Read supported options
@@ -4725,12 +4894,12 @@
           );
 
           if (validationError) {
-            throw new TriauthError(validationError.code, validationError.message);
+            throw new TriauthError(validationError);
           }
 
           // Every flow that follows a sign-in (all but `auth`) requires the session key of that sign-in
           if (type !== 'auth' && sessionKey == null) {
-            throw new TriauthError(226, 'Invalid session key');
+            throw new TriauthError({code: 'invalid_session_key', reason: 'invalid', message: 'Invalid session key'});
           }
 
           config.logger?.info?.('Request parameters:', {identifier, callbackUrl, ext});
@@ -4759,7 +4928,7 @@
           // Fail early if the just-built challenge is not itself a valid challenge
           const challengeError = Validator.validateChallenge(challengeString).errors[0];
           if (challengeError) {
-            throw new TriauthError(challengeError.code, challengeError.message);
+            throw new TriauthError(challengeError);
           }
 
           // A delegated session key is `<domain>:<key>`, and its session is at the authenticator of that domain
@@ -4768,7 +4937,7 @@
 
           // Check if authentication endpoint has been configured for the domain name
           if (!(await authenticationEndpoint.resolve())) {
-            throw new TriauthError(301, 'Domain is not configured for triauth');
+            throw new TriauthError({code: 'domain_not_configured', message: 'Domain is not configured for triauth'});
           }
 
           // Enforce config.requireSecure if set
@@ -4797,7 +4966,7 @@
         ) {
 
           if (response === 'false') {
-            throw new TriauthError(403, 'Request has been denied');
+            throw new TriauthError({code: 'request_denied', message: 'Request has been denied'});
           }
 
           // The stored challenge is `<challenge>.<decryptionKey>`, and the response is sealed to the challenge's `ek`
@@ -4805,14 +4974,14 @@
 
           const validationError = (
             Validator.validateChallenge(challengeString).errors[0] ||
-            ((rest !== undefined || !Helpers.isBase64UrlString(decryptionKey) || decryptionKey.length !== 43) && {code: 223, message: 'Invalid challenge'}) ||
+            ((rest !== undefined || !Helpers.isBase64UrlString(decryptionKey) || decryptionKey.length !== 43) && {code: 'invalid_challenge', reason: 'invalid', message: 'Invalid challenge'}) ||
             Validator.validateSealedResponse(response).errors[0] ||
             (identifier != null && Validator.validateIdentifier(identifier).errors[0]) ||
             (callbackUrl != null && Validator.validateCallbackUrl(callbackUrl).errors[0])
           );
 
           if (validationError) {
-            throw new TriauthError(validationError.code, validationError.message);
+            throw new TriauthError(validationError);
           }
 
           config.logger?.info?.('Verifying response with constraints', {type, identifier, callbackUrl});
@@ -4823,13 +4992,13 @@
           try {
             challengeObj = Challenge.fromString(challengeString, config);
           } catch (err) {
-            throw new TriauthError(223, 'Invalid challenge', {cause:err});
+            throw new TriauthError({code: 'invalid_challenge', reason: 'invalid', message: 'Invalid challenge'}, {cause:err});
           }
 
           // Every challenge carries the encryption key that its response is sealed to
           const encryptionKey = challengeObj.data.ek;
           if (!Helpers.isBase64UrlString(encryptionKey) || encryptionKey.length !== 87) {
-            throw new TriauthError(223, 'Invalid challenge');
+            throw new TriauthError({code: 'invalid_challenge', reason: 'invalid', message: 'Invalid challenge'});
           }
 
           let envelope, sessionKey;
@@ -4837,12 +5006,12 @@
           try {
             ({response: envelope, sessionKey} = await ResponseCipher.open(encryptionKey, decryptionKey, response));
           } catch (err) {
-            throw new TriauthError(224, 'Invalid response', {cause:err});
+            throw new TriauthError({code: 'invalid_response', reason: 'invalid', message: 'Invalid response'}, {cause:err});
           }
 
           const responseError = Validator.validateResponse(envelope).errors[0];
           if (responseError) {
-            throw new TriauthError(responseError.code, responseError.message);
+            throw new TriauthError(responseError);
           }
 
           responseObj = new Response(envelope, config);
@@ -4854,7 +5023,7 @@
             (identifier != null && challengeObj.identity.identifier !== identifier) ||
             (callbackUrl != null && challengeObj.data.cburl !== callbackUrl)
           ) {
-            throw new TriauthError(401, 'Your identity could not be verified');
+            throw new TriauthError({code: 'verification_failed', message: 'Your identity could not be verified'});
           }
 
           const retval = await callbacks.onResponse({challenge:challengeObj, response:responseObj, sessionKey});
@@ -4865,16 +5034,16 @@
             return retval;
 
           } else if (retval === null) {
-            throw new TriauthError(402, 'Authentication request has expired, please try again');
+            throw new TriauthError({code: 'request_expired', message: 'Authentication request has expired, please try again'});
 
           } else {
-            throw new TriauthError(401, 'Your identity could not be verified');
+            throw new TriauthError({code: 'verification_failed', message: 'Your identity could not be verified'});
 
           }
 
         // Fail when the given function arguments do not match to any of stages.
         } else {
-          throw new TriauthError(101, 'Invalid or missing function arguments - expected either {identifier,callbackUrl,ext,...} or {challenge,response,identifier?,callbackUrl?}');
+          throw new TriauthError({code: 'invalid_arguments', message: 'Invalid or missing function arguments - expected either {identifier,callbackUrl,ext,...} or {challenge,response,identifier?,callbackUrl?}'});
 
         }
 
@@ -4928,12 +5097,12 @@
       ) {
         return {sig, verifyResult};
 
-      // For time constraints verification failure, signal "expired" (caller surfaces 402).
+      // For time constraints verification failure, signal "expired" (caller surfaces request_expired).
       } else if (verifyResult === null) {
         config.logger?.info?.('Verification failed - request expired', {identifier:challenge.identity.identifier, iat:parseInt(challenge.data.iat, 10)});
         return null;
 
-      // For other falsy signature verification results, signal a generic failure (caller surfaces 401).
+      // For other falsy signature verification results, signal a generic failure (caller surfaces verification_failed).
       } else {
         config.logger?.info?.('Verification failed', {identifier:challenge.identity.identifier});
         return false;
@@ -4948,11 +5117,11 @@
      *
      * @param secure {boolean|undefined} - the aggregate DNSSEC-validation flag of the result.
      * @param config {object} - effective config; `requireSecure` (default false) toggles enforcement.
-     * @throws {TriauthError} 404 when `config.requireSecure` is set and `secure` is not strictly `true`.
+     * @throws {TriauthError} `dnssec_required` when `config.requireSecure` is set and `secure` is not strictly `true`.
      */
     static assertSecure(secure, config) {
       if (config.requireSecure && secure !== true) {
-        throw new TriauthError(404, 'Your domain does not support DNSSEC, which is required to continue.');
+        throw new TriauthError({code: 'dnssec_required', message: 'Your domain does not support DNSSEC, which is required to continue.'});
       }
     }
 
@@ -5013,7 +5182,7 @@
    * If the user approves the authentication request, Triauth Authenticator signs the challenge using one or more private keys that are available to it, and for which matching public keys may be obtained from the identity records, associated with the user's `identifier`, stored in the DNS.
    * It then redirects the web browser to the `callbackUrl`, by default using a `HTTP GET` method, and passes the signature, together with optional additional data, inside the `response` URL parameter.
    *
-   * If the user declines the authentication request, the Triauth Authenticator sends `false` as the `response`, which `Triauth.authenticate` reports as error 403.
+   * If the user declines the authentication request, the Triauth Authenticator sends `false` as the `response`, which `Triauth.authenticate` reports as the error `request_denied`.
    *
    * **3. Verify**
    *
@@ -5021,7 +5190,7 @@
    * The callback method that is used to pass the response to the client application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.authenticate` function together with the previously stored `challenge` (string) to obtain authentication result.
-   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`.
+   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`. Every other option belongs to stage 1 and is rejected here with `invalid_arguments`.
    *
    * > [!WARNING]
    * > **Invalidate the challenge after every authentication attempt.**
@@ -5106,7 +5275,7 @@
    * @returns {Promise<
    *     {challenge: string, redirectUrl: string}
    *   | {authenticated: true, issuedAt: number, signedAt: number, verifiedAt: number, expires: (number|undefined), secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, publicProfile: object, groups: Array<string>, deviceName: string, deviceTag: string, keys: Array<object>, sessionKey: string, ext: object}
-   *   | {error: {code: number, message: string}}
+   *   | {error: {code: string, reason?: string, message: string}}
    * >} A promise that resolves to one of the following:
    * - `{challenge: string, redirectUrl: string}`: Returned during stage 1 when a challenge is generated. The `challenge` should be stored and the user should be redirected to the `redirectUrl`.
    * - `{authenticated: true, issuedAt: number, signedAt: number, verifiedAt: number, expires?: number, secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, publicProfile: object, groups: Array<string>, deviceName: string, deviceTag: string, keys: Array<object>, sessionKey: string, ext: object}`: Returned during stage 3 upon successful authentication. Includes:
@@ -5129,7 +5298,7 @@
    *   - `keys` (array): Public keys that were considered and/or used during verification.
    *   - `sessionKey` (string): A secret of this sign-in, in 43 base64url characters, that only your application and the user's authenticator know. Pass it to `Triauth.ping`, `Triauth.sign`, `Triauth.stamp` and `Triauth.attest`. Store it with the user's server-side or encrypted session, and keep it out of logs. After a delegated sign-in, it starts with the actor's domain and a colon.
    *   - `ext` (object): Data returned by the authenticator application for the requested protocol extensions. Always present - `{}` when no extension data was returned (a malformed `ext` is discarded with a logged warning and also yields `{}`).
-   * - `{error: {code: number, message: string}}`: Returned during stage 1 or stage 3 when authentication fails, includes an error object with code and message.
+   * - `{error: {code: string, reason?: string, message: string}}`: Returned during stage 1 or stage 3 when authentication fails, includes an error object with code and message.
    */
   const authenticate$1 = async(options, config = {}) => {
     config = Helpers.mergeConfig(config);
@@ -5143,7 +5312,7 @@
       // Verify the response against the challenge
       const result = await ChallengeResponseFlow.verifyChallengeResponse('auth', challenge.challengeString, challenge, response, config.authTimeout, config);
 
-      // Propagate the failure signals unchanged: null -> 402 (expired), false -> 401 (invalid).
+      // Propagate the failure signals unchanged: null -> request_expired, false -> verification_failed.
       if (!result) {
         return result;
       }
@@ -5239,11 +5408,11 @@
    * @returns {Promise<
    *     {valid: true, secure: boolean, expires: (number|undefined), groups: Array<string>}
    *   | {valid: false, reason: 'revoked'|'unresolved'}
-   *   | {error: {code: number, message: string}}
+   *   | {error: {code: string, reason?: string, message: string}}
    * >} A promise that resolves to one of the following:
    * - `{valid: true, secure: boolean, expires?: number, groups: Array<string>}`: Indicates that the user may remain authenticated. The `secure` property is `true` only when the domain's `triauth` configuration record and every well-formed record of the identity answer (for composite device tags, of both identities' answers) were DNSSEC-validated. The `expires` property, when a number, is the Unix timestamp until which the `check` method need not be called again; it is `undefined` when the DNS records carry no TTL (e.g., under the NodeDns resolver) - in that case apply your own minimum re-check interval. The `groups` property carries the identity's **current** fully-qualified group names — replace any session-cached groups with this list on every check, so membership changes take effect within the same bound as key revocation.
-   * - `{valid: false, reason: 'revoked'|'unresolved'}`: Indicates that the device may no longer remain authenticated and should be logged out (call `Triauth.authenticate` again to re-authenticate). The `reason` is diagnostic only: `'revoked'` - the device's keys are no longer published in the DNS; `'unresolved'` - the identity itself (or, for a delegated `deviceTag`, the actor's identity) no longer resolves (e.g., the domain is no longer configured for triauth, or has no identity records).
-   * - `{error: {code: number, message:string}}`: Indicates that there was some problem, and the status cannot be determined at the moment, including an `error` message with more details.
+   * - `{valid: false, reason: 'revoked'|'unresolved'}`: Indicates that the device may no longer remain authenticated and should be logged out (call `Triauth.authenticate` again to re-authenticate). The `reason` is diagnostic only: `'revoked'` - the device's keys are no longer published in the DNS; `'unresolved'` - the identity itself (or, for a delegated `deviceTag`, the actor's identity) no longer resolves (e.g., the domain is no longer configured for triauth, or has no identity records). A `deviceTag` outside the format of a device tag is reported as `'revoked'` without a DNS lookup.
+   * - `{error: {code: string, reason?: string, message: string}}`: Indicates that there was some problem, and the status cannot be determined at the moment, including an `error` message with more details.
    */
   const check$1 = async (options, config = {}) => {
     config = Helpers.mergeConfig(config);
@@ -5256,12 +5425,12 @@
 
       // Ensure only recognized options are present to help avoid misspellings.
       if (!Helpers.hasOnlyKnownProperties(options, ['identifier', 'deviceTag'])) {
-        throw new TriauthError(102, 'Unrecognized function argument');
+        throw new TriauthError({code: 'invalid_arguments', message: 'Unrecognized function argument'});
       }
 
       // Reject config overrides carrying unknown keys
       if (!Helpers.hasOnlyKnownProperties(config, KNOWN_CONFIG_KEYS)) {
-        throw new TriauthError(103, 'Unrecognized configuration key');
+        throw new TriauthError({code: 'invalid_config', message: 'Unrecognized configuration key'});
       }
 
       const identifier = options.identifier;
@@ -5270,10 +5439,22 @@
       config.logger?.info?.('Request parameters:', {identifier, deviceTag});
 
       if (typeof identifier !== 'string' || typeof deviceTag !== 'string') {
-        throw new TriauthError(101, 'Invalid or missing function arguments');
+        throw new TriauthError({code: 'invalid_arguments', message: 'Invalid or missing function arguments'});
       }
 
-      // Parse the composite deviceTag
+      // A malformed identifier is a caller error, reported ahead of the device tag verdict
+      const identifierError = Validator.validateIdentifier(identifier).errors[0];
+      if (identifierError) {
+        throw new TriauthError(identifierError);
+      }
+
+      // A device tag outside the closed grammar was never minted by a result, so it reads as revoked, with no DNS lookup
+      if (!Validator.validateDeviceTag(deviceTag).valid) {
+        config.logger?.debug?.('Check failed - malformed deviceTag', {identifier});
+        return { valid: false, reason: 'revoked' };
+      }
+
+      // Decompose the deviceTag: a direct tag is one component, a delegated tag is three
       const parts = deviceTag.split(':');
       const [subjectComponent, subjectLookupCode] = parts[0].split('~');
 
@@ -5313,18 +5494,8 @@
         // Decompose the deviceTag for delegated/actor flows into the `include` statement tag, actor's identifier,
         // and actor's device tag; the device component resolves in the actor's zone, so it carries the actor's salt
         const includeTag = subjectComponent;
-        const [, actorIdentifier, actorDeviceTagComponent, rest] = parts;
-        const [actorDeviceTag, actorLookupCode] = (actorDeviceTagComponent ?? '').split('~');
-
-        // Validate the device tag format - return {valid: false} as with any other invalid deviceTag
-        if (
-          !includeTag ||
-          !Validator.validateIdentifier(actorIdentifier).valid ||
-          !actorDeviceTag ||
-          rest !== undefined
-        ) {
-          return { valid: false, reason: 'revoked' };
-        }
+        const [, actorIdentifier, actorDeviceTagComponent] = parts;
+        const [actorDeviceTag, actorLookupCode] = actorDeviceTagComponent.split('~');
 
         const actorIdentity = new Identity(actorIdentifier, {lookupCode:actorLookupCode}, config);
 
@@ -5439,7 +5610,7 @@
    * The method that is used to pass the response to your application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.ping` function together with the previously stored `challenge` (string) to obtain ping result.
-   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`.
+   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`. Every other option belongs to stage 1 and is rejected here with `invalid_arguments`.
    *
    * > [!WARNING]
    * > **Invalidate the challenge after every ping attempt.**
@@ -5513,7 +5684,7 @@
    *
    * @param [options.identifier] {string} - (stage 1) the user provided identifier
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
-   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result whose `ext.permissions.ping` is `true`; a stage-1 request without a valid session key returns error 226
+   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result whose `ext.permissions.ping` is `true`; a stage-1 request without a valid session key returns the error `invalid_session_key`
    * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{callbackMethod:'GET'}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
@@ -5524,7 +5695,7 @@
    * @returns {Promise<
    *     {challenge: string, redirectUrl: string}
    *   | {pinged: true, issuedAt: number, signedAt: number, verifiedAt: number, expires: (number|undefined), secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, groups: Array<string>, deviceName: string, deviceTag: string, keys: Array<object>}
-   *   | {error: {code: number, message: string}}
+   *   | {error: {code: string, reason?: string, message: string}}
    * >}
    */
   const ping$1 = async(options, config = {}) => {
@@ -5539,7 +5710,7 @@
       // Verify the response against the challenge
       const result = await ChallengeResponseFlow.verifyChallengeResponse('ping', challenge.challengeString, challenge, response, config.pingTimeout, config);
 
-      // Propagate the failure signals unchanged: null -> 402 (expired), false -> 401 (invalid).
+      // Propagate the failure signals unchanged: null -> request_expired, false -> verification_failed.
       if (!result) {
         return result;
       }
@@ -5614,7 +5785,7 @@
    * > **Binders: what an attestation is tied to.**<br/>
    * > A verification provider that learns the user states it in the `bind` object of its signature's signed metadata:
    * > `identifier` (the user's identifier), `via` (the client application), and `deviceTag` (the device that completed the ceremony).
-   * > Every member of `bind` is critical, on every signature of the response: an unrecognized binder — or one that does not equal the verified user's value — fails the attestation (401),
+   * > Every member of `bind` is critical, on every signature of the response: an unrecognized binder — or one that does not equal the verified user's value — fails the attestation (`verification_failed`),
    * > so a provider's signed statement can never be silently ignored. Members of the signed metadata outside `bind` are auxiliary, and unrecognized ones are ignored.
    * > An attester that binds nothing attests anonymously (the default); the binders it did state are surfaced under `attestations.<id>.signedMetadata.bind`, so you can require their presence.
    *
@@ -5677,7 +5848,7 @@
    * > [!TIP]
    * > The URLs of verification providers are shown in the UI, so keep them short and human-friendly.
    *
-   * If the user declines the request, the Triauth Authenticator sends `false` as the `response`, which `Triauth.attest` reports as error 403.
+   * If the user declines the request, the Triauth Authenticator sends `false` as the `response`, which `Triauth.attest` reports as the error `request_denied`.
    *
    * **3. Verify**
    *
@@ -5685,7 +5856,7 @@
    * The method that is used to pass the response to your application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.attest` function together with the previously stored `challenge` (string) to obtain attestation result.
-   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`.
+   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`. Every other option belongs to stage 1 and is rejected here with `invalid_arguments`.
    *
    * Synopsis:
    *
@@ -5792,8 +5963,8 @@
    *
    * @param [options.identifier] {string} - (stage 1) the user provided identifier
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
-   * @param [options.attestations] {object} - (stage 1) an object whose keys are caller-chosen attestation IDs and whose values are `{label, providers}` objects describing each requested attestation; at most 4 attestations, each listing at most 4 `https://` provider URLs (error 229 otherwise)
-   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result; a stage-1 request without a valid session key returns error 226
+   * @param [options.attestations] {object} - (stage 1) an object whose keys are caller-chosen attestation IDs (printable ASCII) and whose values are `{label, providers}` objects describing each requested attestation; at most 4 attestations, each listing at most 4 `https://` provider URLs (error `invalid_attestations` otherwise)
+   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result; a stage-1 request without a valid session key returns the error `invalid_session_key`
    * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{callbackMethod:'GET'}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
@@ -5804,7 +5975,7 @@
    * @returns {Promise<
    *     {challenge: string, redirectUrl: string}
    *   | {attested: true, issuedAt: number, signedAt: number, verifiedAt: number, expires: (number|undefined), secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, groups: Array<string>, attestations: object, deviceName: string, deviceTag: string, keys: Array<object>}
-   *   | {error: {code: number, message: string}}
+   *   | {error: {code: string, reason?: string, message: string}}
    * >} A promise that resolves to one of the following:
    * - `{challenge: string, redirectUrl: string}`: Returned during stage 1 when a challenge is generated. The `challenge` should be stored and the user should be redirected to the `redirectUrl`.
    * - `{attested: true, issuedAt: number, signedAt: number, verifiedAt: number, expires?: number, secure: boolean, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, groups: Array<string>, attestations: object, deviceName: string, deviceTag: string, keys: Array<object>}`: Returned during stage 3 upon successful attestation. Includes:
@@ -5825,7 +5996,7 @@
    *   - `deviceName` (string): User-given, public name of the device that signed the request.
    *   - `deviceTag` (string): Unique identifier of the device (and, for a delegated ceremony, the delegation) that signed the request, in the same form `Triauth.authenticate` reports it.
    *   - `keys` (array): Public keys considered and/or used to verify the user's signature.
-   * - `{error: {code: number, message: string}}`: Returned during stage 1 or stage 3 when attestation fails, includes an error object with code and message.
+   * - `{error: {code: string, reason?: string, message: string}}`: Returned during stage 1 or stage 3 when attestation fails, includes an error object with code and message.
    */
   const attest$1 = async(options, config = {}) => {
     config = Helpers.mergeConfig(config);
@@ -5833,13 +6004,12 @@
 
     options = Object.assign({}, options);
     const attestationsOption = options.attestations;
-    delete options.attestations;
 
     const validateAttestations = (attestations) => {
       const validationError = Validator.validateAttestations(attestations).errors[0];
 
       if (validationError) {
-        throw new TriauthError(validationError.code, validationError.message);
+        throw new TriauthError(validationError);
       }
     };
 
@@ -5964,7 +6134,7 @@
       }
     };
 
-    return ChallengeResponseFlow.perform('attest', options, {onChallenge, onResponse}, config);
+    return ChallengeResponseFlow.perform('attest', options, {onChallenge, onResponse}, config, ['attestations']);
   };
 
   var attestation = /*#__PURE__*/Object.freeze({
@@ -5996,7 +6166,7 @@
    *
    * let whoisResult = await Triauth.whois({identifier});
    * let whoisResult = await Triauth.whois({identifier, lookupCode}); // for an identity under a mode=private domain
-   * // returns {error: {code: number, message: string}} upon error
+   * // returns {error: {code: string, reason?: string, message: string}} upon error
    * // returns {status:1, identifier, authenticationEndpoint:{…}, identityDomain, secure, publicProfile:{…}, groups:[…], devices:[…], includes:[…]} if identifier exists
    * // returns {status:0, identifier, authenticationEndpoint:{…}, identityDomain} if domain is configured for triauth but the identifier does not exist or, for mode=private domains, a missing or wrong lookupCode was supplied
    * // returns {status:-1, identifier} if domain is not configured for triauth
@@ -6083,14 +6253,14 @@
    * @param [config={}] {object} - optional overrides for the global Triauth.config settings
    *
    * @returns {Promise<
-   *     {error: {code: number, message: string}}
+   *     {error: {code: string, reason?: string, message: string}}
    *   | {identifier: string, status: -1}
    *   | {identifier: string, status: 0, authenticationEndpoint: {url: string, options: object, secure: boolean}, identityDomain: string|null}
    *   | {identifier: string, status: 1, authenticationEndpoint: {url: string, options: object, secure: boolean}, identityDomain: string, secure: boolean, publicProfile: object, groups: Array<string>, devices: Array<{deviceName: string, deviceTag: string, keys: Array<{value: string, options: object}>}>, includes: Array<{ref: string, options: object, tag: string}>}
    * >} A promise that resolves into one of the following:
-   * - `{error: {code, message}}` — the arguments were rejected (101 a missing `identifier` or a malformed `lookupCode`, 102 an unrecognized option key — a bare identifier string or a config object in the options position included, 103 an unrecognized config key, 21x an invalid identifier) or the DNS resolution failed (110).
+   * - `{error: {code, message}}` — the arguments were rejected (`invalid_arguments` for a missing `identifier` or an unrecognized option key — a bare identifier string or a config object in the options position included, `invalid_config` for an unrecognized config key, `invalid_lookup_code` for a malformed `lookupCode`, `invalid_identifier` for an invalid identifier) or the DNS resolution failed (`dns_unavailable`).
    * - `{identifier, status: -1}` — the identity domain does not exist or is not configured for triauth (no `authenticationEndpoint` could be resolved).
-   * - `{identifier, status: 0, authenticationEndpoint, identityDomain}` — the domain is triauth-configured but no identity records exist for this identifier. Under `mode=private` this is also the answer when the call carries no `lookupCode` (then `identityDomain` is `null`, as no identity domain could be derived) or a wrong one (a malformed `lookupCode` is instead rejected with error 101).
+   * - `{identifier, status: 0, authenticationEndpoint, identityDomain}` — the domain is triauth-configured but no identity records exist for this identifier. Under `mode=private` this is also the answer when the call carries no `lookupCode` (then `identityDomain` is `null`, as no identity domain could be derived) or a wrong one (a malformed `lookupCode` is instead rejected with the error `invalid_lookup_code`).
    * - `{identifier, status: 1, authenticationEndpoint, identityDomain, secure, publicProfile, groups, devices, includes}` — the identifier was fully resolved. The `secure` flag is resolution-level: true only when DNSSEC was reported for the domain's `triauth` configuration record and for every well-formed record of the identity answer (DNSSEC validates answers, not individual records, so one flag describes the identity answer; `authenticationEndpoint.secure` isolates the endpoint record's own status). The `groups` array lists the identity's fully-qualified group-membership claims (sorted, deduplicated; e.g., `['admins@triauthdemo.org']`). Each entry in `devices` carries:
    *   - `deviceName` {string} — a user given name of the device,
    *   - `deviceTag` {string} — a unique tag identifying the device by its associated public keys,
@@ -6111,18 +6281,26 @@
     try {
       // Ensure only recognized options are present to help avoid misspellings
       if (!Helpers.hasOnlyKnownProperties(options, ['identifier', 'lookupCode'])) {
-        throw new TriauthError(102, 'Unrecognized function argument');
+        throw new TriauthError({code: 'invalid_arguments', message: 'Unrecognized function argument'});
       }
 
       // Reject config carrying unknown keys
       if (!Helpers.hasOnlyKnownProperties(config, KNOWN_CONFIG_KEYS)) {
-        throw new TriauthError(103, 'Unrecognized configuration key');
+        throw new TriauthError({code: 'invalid_config', message: 'Unrecognized configuration key'});
       }
 
       const {identifier, lookupCode} = options;
 
-      if (typeof identifier !== 'string' || (lookupCode !== undefined && !Helpers.isLookupCode(lookupCode))) {
-        throw new TriauthError(101, 'Invalid or missing function arguments');
+      if (typeof identifier !== 'string') {
+        throw new TriauthError({code: 'invalid_arguments', message: 'Invalid or missing function arguments'});
+      }
+
+      // A malformed lookup code is a caller error, never repaired, and rejected before any DNS lookup
+      if (lookupCode !== undefined) {
+        const validationResult = Validator.validateLookupCode(lookupCode);
+        if (!validationResult.valid) {
+          throw new TriauthError(validationResult.errors[0]);
+        }
       }
 
       const retval = {status:null, identifier};
@@ -6219,17 +6397,14 @@
     options = Object.assign({}, options);
 
     const messageOption = options.message;
-    delete options.message;
-
     const attachmentsProvided = 'attachments' in options;
     const attachmentsOption = options.attachments;
-    delete options.attachments;
 
     const validateMessage = (message) => {
       const validationError = Validator.validateMessage(message).errors[0];
 
       if (validationError) {
-        throw new TriauthError(validationError.code, validationError.message);
+        throw new TriauthError(validationError);
       }
     };
 
@@ -6237,7 +6412,7 @@
       const validationError = Validator.validateAttachments(attachments, requireSourceUrl).errors[0];
 
       if (validationError) {
-        throw new TriauthError(validationError.code, validationError.message);
+        throw new TriauthError(validationError);
       }
     };
 
@@ -6250,7 +6425,7 @@
         challenge.data.attachments = attachmentsOption ?? [];
 
       } else if (attachmentsProvided) {
-        throw new TriauthError(102, 'Attachments option may only be used with Triauth.sign function');
+        throw new TriauthError({code: 'invalid_arguments', message: 'Attachments option may only be used with Triauth.sign function'});
       }
     };
 
@@ -6264,7 +6439,7 @@
         validateAttachments(challengeAttachments);
 
       } else if ('attachments' in challenge.data) {
-        throw new TriauthError(102, 'Attachments option may only be used with Triauth.sign function');
+        throw new TriauthError({code: 'invalid_arguments', message: 'Attachments option may only be used with Triauth.sign function'});
 
       }
 
@@ -6272,7 +6447,7 @@
       // challenge nonce/iat/cburl. This makes stamps portable across verifiers (within the `ts` window).
       const result = await ChallengeResponseFlow.verifyChallengeResponse(type, message, challenge, response, (type === 'sign' ? config.signTimeout : config.stampTimeout), config);
 
-      // Propagate the failure signals unchanged: null -> 402 (expired), false -> 401 (invalid).
+      // Propagate the failure signals unchanged: null -> request_expired, false -> verification_failed.
       if (!result) {
         return result;
       }
@@ -6329,7 +6504,7 @@
       return Helpers.clone(retval);
     };
 
-    return ChallengeResponseFlow.perform(type, options, {onChallenge, onResponse}, config);
+    return ChallengeResponseFlow.perform(type, options, {onChallenge, onResponse}, config, ['message', 'attachments']);
   };
 
   /**
@@ -6427,7 +6602,7 @@
    * Once the user's web browser is redirected to the `redirectUrl`, they will be taken to the Triauth Authenticator web application,
    * where they will be presented with the message, and have an opportunity to view and/or download attachments.
    *
-   * If the user declines the signing request, the Triauth Authenticator sends `false` as the `response`, which `Triauth.sign` reports as error 403.
+   * If the user declines the signing request, the Triauth Authenticator sends `false` as the `response`, which `Triauth.sign` reports as the error `request_denied`.
    *
    * **3. Verify**
    *
@@ -6435,7 +6610,7 @@
    * The method that is used to pass the response to your application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.sign` function together with the previously stored `challenge` (string) to obtain signing result.
-   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`.
+   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`. Every other option belongs to stage 1 and is rejected here with `invalid_arguments`.
    *
    * Synopsis:
    *
@@ -6525,7 +6700,7 @@
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
    * @param [options.message] {string} - (stage 1) a human-readable text message to be signed
    * @param [options.attachments] {Array<{name: string, sourceUrl: string, sha256: string}>} - (stage 1) optional list of at most 10 attachments to be covered by the signature; `name` must be unique within the list and `sha256` a lowercase hex digest
-   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result; a stage-1 request without a valid session key returns error 226
+   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result; a stage-1 request without a valid session key returns the error `invalid_session_key`
    * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{callbackMethod:'GET'}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
@@ -6536,7 +6711,7 @@
    * @returns {Promise<
    *     {challenge: string, redirectUrl: string}
    *   | {signed: true, result: string, issuedAt: number, signedAt: number, verifiedAt: number, verificationResult: object}
-   *   | {error: {code: number, message: string}}
+   *   | {error: {code: string, reason?: string, message: string}}
    * >}
    */
   const sign$1 = async(options = {}, config = {}) => {
@@ -6623,7 +6798,7 @@
    * The method that is used to pass the response to your application can be configured with [callbackMethod extension](#protocol-extensions).
    *
    * Once you extract the `response` (string), you should pass it to the `Triauth.stamp` function together with the previously stored `challenge` (string) to obtain stamping result.
-   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`.
+   * If you decide to also pass the `identifier` and/or `callbackUrl` together with `challenge` and `response`, it will be additionally verified that they are the same as embedded in the `challenge`. Every other option belongs to stage 1 and is rejected here with `invalid_arguments`.
    *
    * Synopsis:
    *
@@ -6703,7 +6878,7 @@
    * @param [options.identifier] {string} - (stage 1) the user provided identifier
    * @param [options.callbackUrl] {string} - (stage 1) an application provided URL to which the user's web browser should be redirected with the response
    * @param [options.message] {string} - (stage 1) a text message to be stamped
-   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result whose `ext.permissions.stamp` is `true`; a stage-1 request without a valid session key returns error 226
+   * @param [options.sessionKey] {string} - (stage 1, required) the `sessionKey` of a `Triauth.authenticate` result whose `ext.permissions.stamp` is `true`; a stage-1 request without a valid session key returns the error `invalid_session_key`
    * @param [options.ext] {object} - (stage 1) an optional object of protocol extensions to use (e.g., `{callbackMethod:'GET'}`)
    *
    * @param [options.challenge] {string} - (stage 3) a challenge as it was returned by the method after stage 1 call
@@ -6714,7 +6889,7 @@
    * @returns {Promise<
    *     {challenge: string, redirectUrl: string}
    *   | {stamped: true, result: string, issuedAt: number, signedAt: number, verifiedAt: number, verificationResult: object}
-   *   | {error: {code: number, message: string}}
+   *   | {error: {code: string, reason?: string, message: string}}
    * >}
    */
   const stamp$1 = async(options = {}, config = {}) => {
@@ -6809,17 +6984,17 @@
    * @param [constraints.ver] {number} - the triauth signature envelope version to require
    * @param [constraints.type] {string} - the type of signature to require — one of 'attest'|'auth'|'ping'|'sign'|'stamp'. Pin this to the expected signature type when possible.
    * @param [constraints.via] {string} - the base URL (e.g., https://example.com/) of the client application the signature was issued to (the base URL of its `callbackUrl`). Pin it when possible. Otherwise a signature requested by another application verifies just as well.
-   * @param [constraints.notBefore] {number} - a Unix timestamp in milliseconds (a non-number is rejected with error 101). If the timestamp encoded in the signature is earlier than this value, the result is `{valid:false, reason:'expired'}`. Note: unlike the internal verify path used by `authenticate`/`ping`/`sign`/`stamp`, `Triauth.verify` does **not** widen this bound by `config.maximalAllowedClientClockDrift` - the comparison is strict.
-   * @param [constraints.notAfter] {number} - a Unix timestamp in milliseconds (a non-number is rejected with error 101). If the timestamp encoded in the signature is greater than this value, the result is `{valid:false, reason:'expired'}`. Note: strict comparison; no clock-drift slack is applied (see `notBefore`).
+   * @param [constraints.notBefore] {number} - a Unix timestamp in milliseconds (a non-number or `NaN` gives `{valid:false, reason:'invalid'}`). If the timestamp encoded in the signature is earlier than this value, the result is `{valid:false, reason:'expired'}`. Note: unlike the internal verify path used by `authenticate`/`ping`/`sign`/`stamp`, `Triauth.verify` does **not** widen this bound by `config.maximalAllowedClientClockDrift` - the comparison is strict.
+   * @param [constraints.notAfter] {number} - a Unix timestamp in milliseconds (a non-number or `NaN` gives `{valid:false, reason:'invalid'}`). If the timestamp encoded in the signature is greater than this value, the result is `{valid:false, reason:'expired'}`. Note: strict comparison; no clock-drift slack is applied (see `notBefore`).
    * @param [constraints.minSignatures] {number} - the minimum number of signature segments the (multi-)signature envelope must contain. A count below this is a signature-count policy decline, reported as `{valid:false, reason:'declined'}`. Note: this counts segments, NOT distinct signers - the same identity may legitimately contribute multiple (e.g., per-device) signatures; to require distinct signers, additionally check `signatures[].identifier` and/or `signatures[].deviceTag` in the result. Because `maxSignatures` defaults to 1, requiring more than one signature means you must also raise `maxSignatures`.
    * @param [constraints.maxSignatures] {number} - the maximum number of signature segments the (multi-)signature envelope may contain. **Defaults to 1** (secure-by-default): when omitted, `Triauth.verify` accepts only a single signature, so a multi-segment envelope is reported as `{valid:false, reason:'declined'}`. To verify a multi-signature envelope, pass an explicit `maxSignatures` (>= the number of segments you expect). The default of 1 also pins the result to the flat single-signature shape and bounds the per-segment DNS resolution work for untrusted input.
-   * @param [config={}] {object} - optional overrides for the global Triauth.config settings. When `config.requireSecure` is set, an otherwise-valid signature whose DNS chain was not reported DNSSEC-validated (`secure !== true`) is rejected with error 404 (surfaced as `{error}`).
+   * @param [config={}] {object} - optional overrides for the global Triauth.config settings. When `config.requireSecure` is set, an otherwise-valid signature whose DNS chain was not reported DNSSEC-validated (`secure !== true`) is rejected with the error `dnssec_required` (surfaced as `{error}`).
    *
    * @returns {Promise<
    *     {valid: true, type: string, identifier: string, identityDomain: string, lookupCode: string, actor: string, actorIdentityDomain: string, actorLookupCode: string, via: string, ver: number, signedAt: number, verifiedAt: number, publicProfile: object, groups: Array<string>, deviceName: string, deviceTag: string, keys: Array<object>, secure: boolean, expires: (number|undefined), signedMetadata: object, unsignedMetadata: object}
    *   | {valid: true, type: 'multisig', secure: boolean, expires: (number|undefined), verifiedAt: number, signatures: Array<object>}
    *   | {valid: false, reason: 'malformed'|'invalid'|'expired'|'declined'}
-   *   | {error: {code: number, message: string}}
+   *   | {error: {code: string, reason?: string, message: string}}
    * >}
    */
   const verify$1 = async function(message, signature, constraints = {}, config = {}) {
@@ -6835,12 +7010,12 @@
         (typeof message !== 'string' || typeof signature !== 'string' || typeof constraints !== 'object' || typeof config !== 'object') ||
         (!Helpers.hasOnlyKnownProperties(constraints, ['identifier', 'actor', 'ver', 'type', 'via', 'notBefore', 'notAfter', 'minSignatures', 'maxSignatures']))
       ){
-        throw new TriauthError(101, 'Invalid arguments');
+        throw new TriauthError({code: 'invalid_arguments', message: 'Invalid or missing function arguments'});
       }
 
       // Reject config overrides carrying unknown keys
       if (!Helpers.hasOnlyKnownProperties(config, KNOWN_CONFIG_KEYS)) {
-        throw new TriauthError(103, 'Unrecognized configuration key');
+        throw new TriauthError({code: 'invalid_config', message: 'Unrecognized configuration key'});
       }
 
       // Signature-count bounds, when provided, must be numbers
@@ -6848,7 +7023,7 @@
         (constraints.minSignatures != null && (typeof constraints.minSignatures !== 'number' || Number.isNaN(constraints.minSignatures))) ||
         (constraints.maxSignatures != null && (typeof constraints.maxSignatures !== 'number' || Number.isNaN(constraints.maxSignatures)))
       ) {
-        throw new TriauthError(101, 'Invalid arguments');
+        throw new TriauthError({code: 'invalid_arguments', message: 'Invalid or missing function arguments'});
       }
 
       // Secure-by-default: when the caller does not specify maxSignatures, it defaults to 1, so an
@@ -6882,7 +7057,7 @@
 
       // Enforce config.requireSecure (mirrors the challenge-response flows and Triauth.check): an
       // otherwise-valid envelope whose DNS chain was not reported DNSSEC-validated is rejected with
-      // error 404, surfaced as {error} via the catch below.
+      // the error dnssec_required, surfaced as {error} via the catch below.
       ChallengeResponseFlow.assertSecure(verifyResult.secure, config);
 
       config.logger?.info?.('Verification successful');
@@ -6893,11 +7068,11 @@
 
     } catch (err) {
 
-      // A 2xx validation/parse error means the envelope could not be parsed into a well-formed
+      // A validation/parse error (one that carries a reason) means the envelope could not be parsed into a well-formed
       // signature - a definitive negative verdict reported as {valid:false, reason:'malformed'}. Other
-      // TriauthErrors (e.g. 404 from requireSecure, or a 110 DNS failure) surface as {error}.
+      // TriauthErrors (e.g. dnssec_required from requireSecure, or a dns_unavailable DNS failure) surface as {error}.
       if (
-        err instanceof TriauthError && err.code >= 200 && err.code < 300
+        err instanceof TriauthError && err.reason !== undefined
       ) {
         return { valid: false, reason: 'malformed' };
       }
@@ -6929,19 +7104,21 @@
    * The validate method can be used to perform a basic format validation on the given objects.
    * It is fast, synchronous, and does not perform any DNS requests.
    *
-   * Currently, it supports validation of personal identifiers (`identifier`) and device names (`deviceName`).
+   * Currently, it supports validation of personal identifiers (`identifier`), device names (`deviceName`),
+   * group names (`groupName`, the bare name as published in a `groups` record, e.g., `admins`),
+   * lookup codes (`lookupCode`, the 16-character code of an identity under a `mode=private` domain),
+   * and device tags (`deviceTag`, as reported in results and passed to {@link Triauth.check}).
    * At least one of the supported objects must be provided, and unrecognized (e.g., misspelled)
    * keys are rejected, so that nothing silently passes as valid without being validated.
    *
    * Synopsis:
    *
    * ```javascript
-   * let validationResult = Triauth.validate({identifier?, deviceName?});
+   * let validationResult = Triauth.validate({identifier?, deviceName?, groupName?, lookupCode?, deviceTag?});
    * // returns {valid:true, errors:[]} if all the objects passed validation
-   * // returns {valid:false, errors:[{code:..., message:...}, ...]} if at least one the objects failed validation
-   * // returns {valid:false, errors:[{code:101, ...}]} when objects is empty or not an object
-   * // returns {valid:false, errors:[{code:102, ...}]} when objects contains an unrecognized key or an undefined value
-   * // returns {valid:false, errors:[{code:103, ...}]} when config contains an unrecognized key or a key set to undefined
+   * // returns {valid:false, errors:[{code:..., reason:..., message:...}, ...]} if at least one the objects failed validation
+   * // returns {valid:false, errors:[{code:'invalid_arguments', ...}]} when objects is empty or not an object, contains an unrecognized key, or an undefined value
+   * // returns {valid:false, errors:[{code:'invalid_config', ...}]} when config contains an unrecognized key or a key set to undefined
    *
    * ```
    *
@@ -6952,7 +7129,16 @@
    * // {valid: true, errors: []}
    *
    * Triauth.validate({identifier: 'john'});
-   * // {valid: false, errors: [{code: 214, message: 'Identifier must include one @ sign'}]}
+   * // {valid: false, errors: [{code: 'invalid_identifier', reason: 'invalid_format', message: 'Identifier must include one @ sign'}]}
+   *
+   * Triauth.validate({groupName: 'admins@example.com'});
+   * // {valid: false, errors: [{code: 'invalid_group_name', reason: 'invalid_characters', message: 'Group name must include only letters, numbers, and hyphens'}]}
+   *
+   * Triauth.validate({lookupCode: 'k7qj3fb9m2wzx0c4'});
+   * // {valid: false, errors: [{code: 'invalid_lookup_code', reason: 'invalid', message: 'Invalid lookup code'}]}
+   *
+   * Triauth.validate({deviceTag: '3bi5oE_jXyjGY0WY5n6YqOuzRxfo40fuqDmLGaA5bKQ~K7QJ3FB9M2WZX0C4'});
+   * // {valid: true, errors: []}
    * ```
    *
    * > [!NOTE]
@@ -6962,12 +7148,15 @@
    * @param objects {object} - one or more objects to validate
    * @param [objects.identifier] {string} - an identifier to validate
    * @param [objects.deviceName] {string} - a deviceName to validate
-   * @param [config={}] {object} - optional overrides for the global Triauth.config settings; unrecognized keys are rejected (103)
+   * @param [objects.groupName] {string} - a bare group name to validate (e.g., `admins`)
+   * @param [objects.lookupCode] {string} - a lookup code to validate (e.g., `K7QJ3FB9M2WZX0C4`)
+   * @param [objects.deviceTag] {string} - a device tag to validate, plain or composite (e.g., `3bi5oE_jXyjGY0WY5n6YqOuzRxfo40fuqDmLGaA5bKQ`)
+   * @param [config={}] {object} - optional overrides for the global Triauth.config settings; unrecognized keys are rejected (`invalid_config`)
    *
-   * @returns {{valid: boolean, errors: Array<{code: number, message: string}>}}
+   * @returns {{valid: boolean, errors: Array<{code: string, reason?: string, message: string}>}}
    *                                          An object with valid property containing the validation result,
    *                                          and the errors property containing an array of errors (if any),
-   *                                          in the {code: number, message: string} format.
+   *                                          in the {code, reason?, message} format.
    */
   const validate$1 = function(objects, config = {}) {
 
@@ -6976,15 +7165,15 @@
     if (!objects || typeof objects !== 'object' || Array.isArray(objects) || Object.keys(objects).length === 0) {
       return {
         valid: false,
-        errors: [{code: 101, message: 'Invalid or missing function arguments'}]
+        errors: [{code: 'invalid_arguments', message: 'Invalid or missing function arguments'}]
       };
     }
 
     // Ensure only recognized objects with defined values are present to help avoid misspellings.
-    if (!Helpers.hasOnlyKnownProperties(objects, ['identifier', 'deviceName'])) {
+    if (!Helpers.hasOnlyKnownProperties(objects, ['identifier', 'deviceName', 'groupName', 'lookupCode', 'deviceTag'])) {
       return {
         valid: false,
-        errors: [{code: 102, message: 'Unrecognized function argument'}]
+        errors: [{code: 'invalid_arguments', message: 'Unrecognized function argument'}]
       };
     }
 
@@ -6992,7 +7181,7 @@
     if (!Helpers.hasOnlyKnownProperties(Helpers.mergeConfig(config), KNOWN_CONFIG_KEYS)) {
       return {
         valid: false,
-        errors: [{code: 103, message: 'Unrecognized configuration override'}]
+        errors: [{code: 'invalid_config', message: 'Unrecognized configuration key'}]
       };
     }
 
@@ -7013,6 +7202,30 @@
 
     if (keys.indexOf('deviceName') >= 0){
       let vr = Validator.validateDeviceName(objects['deviceName']);
+      if (!vr.valid) {
+        retval.valid = false;
+        retval.errors = retval.errors.concat(vr.errors);
+      }
+    }
+
+    if (keys.indexOf('groupName') >= 0){
+      let vr = Validator.validateGroupName(objects['groupName']);
+      if (!vr.valid) {
+        retval.valid = false;
+        retval.errors = retval.errors.concat(vr.errors);
+      }
+    }
+
+    if (keys.indexOf('lookupCode') >= 0){
+      let vr = Validator.validateLookupCode(objects['lookupCode']);
+      if (!vr.valid) {
+        retval.valid = false;
+        retval.errors = retval.errors.concat(vr.errors);
+      }
+    }
+
+    if (keys.indexOf('deviceTag') >= 0){
+      let vr = Validator.validateDeviceTag(objects['deviceTag']);
       if (!vr.valid) {
         retval.valid = false;
         retval.errors = retval.errors.concat(vr.errors);
@@ -7097,7 +7310,7 @@
      * @returns {Promise.<Array.<{key:string, value:string, options:object, ttl:(number|undefined), dnssec:(boolean|undefined)}>>}
      *          A promise that resolves to the array of configuration entries/objects, as read from DNS, each in form of {key, value, options, ttl, dnssec}.
      *
-     * @throws {TriauthError} code 110 when the underlying DNS query fails - intentionally propagated so that
+     * @throws {TriauthError} `dns_unavailable` when the underlying DNS query fails - intentionally propagated so that
      *                        API methods report a retryable error instead of treating the name as unconfigured.
      */
     async resolveConfig(domainName, config={}) {
@@ -7113,7 +7326,7 @@
 
       } catch (err) {
         config.logger?.debug?.(`DNS name resolution failed for ${domainName}`, {cause:err});
-        throw new TriauthError(110, 'DNS resolution failed, try again later');
+        throw new TriauthError({code: 'dns_unavailable', message: 'DNS resolution failed, try again later'});
       }
 
       // A record is its key, a blank run, and a rest with no line terminator. An option is a whole
@@ -7158,10 +7371,9 @@
                 return;
               }
 
-              // Protect against JS specific prototype poisoning attacks
-              if (optionKey !== '__proto__' && optionKey !== 'constructor' && optionKey !== 'prototype') {
-                entry.options[optionKey] = optionValue;
-              }
+              // The map has no prototype, so a name such as `__proto__` is an ordinary key here, and the rules of
+              // each record family judge it like any other unknown option
+              entry.options[optionKey] = optionValue;
             }
 
             // The text before the option run is the value. An options-only record has none and is ignored below.
@@ -7227,6 +7439,18 @@
       super();
       this.url = url;
       this.options = options;
+    }
+
+    /**
+     * Folds a DNS name for comparison: ASCII-lowercased, without the trailing dot of the absolute form.
+     * DNS names compare without regard to ASCII case, and a server may spell the owner name of an answer
+     * in another case than the query.
+     *
+     * @param name {string} - A DNS name as queried, or as returned in an answer.
+     * @returns {string} The folded name.
+     */
+    static foldName(name) {
+      return Helpers.asciiLowercase(name.endsWith('.') ? name.slice(0, -1) : name);
     }
 
     /**
@@ -7479,10 +7703,12 @@
             'CNAME': 5
           };
 
+          const queriedName = DnsJson.foldName(domainName);
+
           for (const a of (json['Answer'] || [])) {
 
             // Ensure the response is for the correct domain
-            if (a['name'] !== domainName && a['name'] !== domainName + '.') {
+            if (typeof a['name'] !== 'string' || DnsJson.foldName(a['name']) !== queriedName) {
               continue;
             }
 
