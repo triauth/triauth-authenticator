@@ -750,7 +750,7 @@ const lookupWithCode = async (code) => {
 };
 
 watch(lookupCode, lookupWithCode);
-watch(lookupCodeSource, autofocus);
+watch(lookupCodeSource, () => autofocus());
 watch(identifier, () => { lookupCodeSource.value = null; lookupCodeInput.value = ''; });
 
 ////////////
