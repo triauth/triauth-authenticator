@@ -549,7 +549,8 @@ const triauthConfig = {resolver: new Triauth.Resolvers.Cloudflare({
 ////////////
 // Step - identifier
 
-const identifier = ref('');
+// The auth and home pages link here with the identifier they could not serve: '#setup?identifier=...'
+const identifier = ref(Helpers.urlFragmentParams(window.location).get('identifier') || '');
 const identifierError = ref(null);
 const whoisResponse = ref(null);
 const dnsHost = ref(null);   // the zone holding the domain, with {name, url, zoneImport, apex} of its DNS host when recognised

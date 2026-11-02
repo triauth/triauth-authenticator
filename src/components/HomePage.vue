@@ -173,7 +173,7 @@ function websiteIconSrc(website) {
   <div v-else>
     <div class="m-20">
       Identifier <strong>{{identifierRef}}</strong> is not configured on this device.<br/><br/>
-      <Button variant="outlined" as="a" href="#setup">Go to setup</Button>
+      <Button variant="outlined" as="a" :href="'#setup?identifier=' + encodeURIComponent(identifierRef)">Go to setup</Button>
     </div>
   </div>
 </template>

@@ -6,6 +6,7 @@
 
 <script setup>
 import {TERMS_URL, PRIVACY_URL, IS_OFFICIAL_INSTANCE, LEGAL_MISCONFIGURED} from "../lib/legal.js";
+import {Helpers} from "../lib/helpers.js";
 
 const consentRequired = Boolean(TERMS_URL || PRIVACY_URL);
 
@@ -14,7 +15,8 @@ const getStarted = () => {
   if (TERMS_URL) window.localStorage.setItem('acceptedTermsUrl', TERMS_URL);
   if (PRIVACY_URL) window.localStorage.setItem('acceptedPrivacyUrl', PRIVACY_URL);
 
-  window.location = '#setup';
+  // A '#setup?identifier=...' link from the auth page keeps its identifier
+  if (Helpers.hashPath(window.location) !== 'setup') window.location = '#setup';
   window.dispatchEvent(new HashChangeEvent("hashchange"));
 }
 </script>

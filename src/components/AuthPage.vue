@@ -44,6 +44,9 @@ const grantsRef = computed(() =>
 
 const errorMessageRef = ref('');
 
+// The identifier of a request this browser has no identity for. The error card then links to the setup with it.
+const setupIdentifierRef = ref(null);
+
 const inCoolOffPeriodRef = ref(false);
 
 const busyRef = ref(false);
@@ -67,7 +70,14 @@ async function setup() {
     identity = await db.find('identities', {identifier});
 
     if (!identity) {
+      setupIdentifierRef.value = identifier;
       throw new AppError(`A website tried to authenticate ${identifier}, but this browser is not yet configured with this identifier.`, {identifier, baseUrl:baseUrl.href});
+    }
+
+    // Signing in, after this stage, needs the accepted terms; the welcome page takes over.
+    if (!window.localStorage.getItem('termsAcceptedAt')) {
+      window.location = '/';
+      return;
     }
 
     ////
@@ -243,7 +253,11 @@ async function deny() {
     <div class="p-5 flex flex-col gap-4 text-center" v-else-if="stateRef === 'error'">
       <div class="font-bold p-2">Authentication request could not be processed</div>
       <div class="text-sm p-2">{{errorMessageRef}}</div>
-      <div class="p-2">You can close this tab or navigate back to the previous page</div>
+      <template v-if="setupIdentifierRef">
+        <div class="p-2"><Button variant="outlined" as="a" :href="'/#setup?identifier=' + encodeURIComponent(setupIdentifierRef)">Set up {{ setupIdentifierRef }} on this device</Button></div>
+        <div class="p-2">When it is done, go back to the website and sign in again</div>
+      </template>
+      <div class="p-2" v-else>You can close this tab or navigate back to the previous page</div>
     </div>
 
     <div class="p-5 text-center" v-else-if="stateRef === 'denied'">

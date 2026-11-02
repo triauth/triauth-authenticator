@@ -9,12 +9,7 @@ import AuthPage from "./components/AuthPage.vue";
 import Footer from "./components/Footer.vue";
 import PassphrasePrompt from "./components/PassphrasePrompt.vue";
 
-// Ensure terms are accepted
-const termsAccepted = window.localStorage.getItem('termsAcceptedAt');
-if (!termsAccepted) {
-  window.location = '/';
-}
-
+// The accepted terms are checked by AuthPage once it knows the identity
 </script>
 
 <template>
