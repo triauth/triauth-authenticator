@@ -17,6 +17,9 @@ import { Helpers } from '../lib/helpers.js'
 import { confetti } from '../lib/confetti.js'
 import { isAndroid, isStandalone, installAvailableRef, promptInstall } from '../lib/pwa.js'
 
+// The list of websites and apps that support triauth, kept on the project site
+const EVERYWHERE_URL = 'https://www.triauth.org/everywhere/';
+
 const identifierRef = ref(null);
 const identityRef = ref(null);
 const identityIdRef = ref(null);
@@ -154,11 +157,13 @@ function websiteIconSrc(website) {
         <h2 class="text-2xl font-bold ta-rise" style="--d:.15s" @animationend="burst">You're all set!</h2>
         <p class="pt-3 px-3 ta-rise" style="--d:.3s">{{ identityRef.whoisResponse ? 'You can now sign in to websites with this device.' : 'Once your DNS records are visible, you can sign in to websites with this device.' }}</p>
         <p class="text-sm pt-5 ta-rise" style="--d:.45s">Websites you sign in to will show up here.</p>
+        <p class="text-sm pt-2 ta-rise" style="--d:.6s"><a :href="EVERYWHERE_URL" target="_blank" rel="noopener noreferrer" class="underline">See where you can use triauth</a>.</p>
       </div>
 
       <div v-else-if="websitesRef.length === 0" class="pt-20 text-center">
         Nothing here yet
         <div class="text-sm pt-5">Websites you sign in to will show up here.</div>
+        <div class="text-sm pt-2">Looking for one? <a :href="EVERYWHERE_URL" target="_blank" rel="noopener noreferrer" class="underline">See where you can use triauth</a>.</div>
       </div>
     </div>
 
