@@ -6,7 +6,7 @@
 
 import { db } from '../db/db.js'
 import {AppError} from "./errors.js";
-import {servesDomain, NOT_SERVED_MESSAGE} from "./domains.js";
+import {servesDomain, NOT_SERVED_MESSAGE, isBridgeHost} from "./domains.js";
 
 export const Helpers = {
 
@@ -207,8 +207,12 @@ export const Helpers = {
       clean.name = name;
     }
 
-    // A canonical URL always parses with the platform URL parser
-    if (Triauth.Helpers.isCanonicalUrl(manifest.startUrl) && new URL(manifest.startUrl).origin === new URL(baseUrl).origin) {
+    // A canonical URL always parses with the platform URL parser. Only a listed bridge may point off the callback's
+    // origin, and only to a secure URL
+    if (Triauth.Helpers.isCanonicalUrl(manifest.startUrl) && (
+      new URL(manifest.startUrl).origin === new URL(baseUrl).origin ||
+      (isBridgeHost(new URL(baseUrl).hostname) && Triauth.Helpers.isSecureUrl(manifest.startUrl))
+    )) {
       clean.startUrl = manifest.startUrl;
     }
 

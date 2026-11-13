@@ -126,3 +126,25 @@ export const servesDomain = (domain) => {
 };
 
 export const NOT_SERVED_MESSAGE = `This authenticator only serves identifiers under ${SERVED_DOMAINS.join(', ')}`;
+
+// Sign-in bridges allowed to point a tile at the app behind the sign-in (sanitizeManifest in helpers.js).
+// VITE_BRIDGE_HOSTS lists exact host names, separated by spaces or commas; unset, the triauth project's bridges.
+
+export const DEFAULT_BRIDGE_HOSTS = ['oidc.triauth.org', 'saml.triauth.org'];
+
+export const parseBridgeHosts = (value) => {
+  const entries = [];
+  for (const entry of String(value || '').toLowerCase().split(/[\s,]+/)) {
+    if (!entry) continue;
+    if (entry === 'localhost' || Triauth.Helpers.isDomainName(entry)) entries.push(entry);
+    else console.warn(`Ignoring configured bridge host that is not a domain name: ${entry}`);
+  }
+  return entries;
+};
+
+export const BRIDGE_HOSTS = (() => {
+  const configured = parseBridgeHosts(import.meta.env.VITE_BRIDGE_HOSTS);
+  return configured.length ? configured : DEFAULT_BRIDGE_HOSTS;
+})();
+
+export const isBridgeHost = (hostname) => BRIDGE_HOSTS.includes(String(hostname || '').toLowerCase());
