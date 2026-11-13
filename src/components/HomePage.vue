@@ -8,6 +8,7 @@
 import {computed, onMounted, onUnmounted, ref, watch} from 'vue';
 import ContextMenu from 'primevue/contextmenu'
 import Dialog from 'primevue/dialog'
+import Textarea from 'primevue/textarea'
 import { useConfirm } from 'primevue/useconfirm';
 
 import MoreVertIcon from '../../vendor/material-icons/MoreVert.vue';
@@ -92,7 +93,7 @@ const confirm = useConfirm();
 const confirmForgetWebsite = (website) => {
   confirm.require({
     header: 'Forget this website?',
-    message: `${website.manifest?.name || website.baseUrl} will be removed. You may be signed out there, and your next sign-in will ask for your approval again.`,
+    message: `${websiteName(website)} will be removed. You may be signed out there, and your next sign-in will ask for your approval again.`,
     acceptProps: { label: 'Forget', severity: 'danger' },
     rejectProps: { label: 'Cancel', severity: 'secondary', variant: 'outlined' },
     accept: () => db.deleteWebsite(website.id)
@@ -101,17 +102,42 @@ const confirmForgetWebsite = (website) => {
 
 const websiteContextMenu = ref();
 const websiteContextMenuSelectionRef = ref();
+const websiteHost = (website) => new URL(website.manifest?.startUrl || website.baseUrl).host;
 const websiteContextMenuItems = [
+  { label: () => 'Open ' + websiteHost(websiteContextMenuSelectionRef.value), command: () => openWebsite(websiteContextMenuSelectionRef.value) },
+  { label: 'Rename', command: () => { renameValue.value = websiteContextMenuSelectionRef.value.name || ''; renameVisible.value = true; } },
   { label: 'Forget this website', command: () => confirmForgetWebsite(websiteContextMenuSelectionRef.value) }
 ]
+
+// The user's own name for a tile, up to two lines; an empty name goes back to the website's own
+const renameVisible = ref(false);
+const renameValue = ref('');
+const saveRename = async () => {
+  const name = renameValue.value.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 2).join('\n');
+  await db.patch('websites', {id: websiteContextMenuSelectionRef.value.id, name});
+  renameVisible.value = false;
+}
+
+const websiteName = (website) => website.name || website.manifest?.name || website.baseUrl;
+const websiteNameParts = (website) => websiteName(website).split(/(?<=\.)/);   // a host name wraps after a dot
 
 const showWebsiteContextMenu = (event, website) => {
   websiteContextMenuSelectionRef.value = website;
   websiteContextMenu.value.show(event);
 }
 
+// Initials for a tile without an icon; a host name counts as one word
 function websiteIconInitials(website) {
-  return String(website.manifest?.name || '').substring(0, 2);
+  const words = websiteName(website).split(/[^\p{L}\p{N}.]+/u).filter(Boolean);
+  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] || '?').slice(0, 2)).toUpperCase();
+}
+
+// A pastel plate per website for tiles without an icon, as on www.triauth.org
+function websiteIconStyle(website) {
+  if (websiteIconSrc(website)) return null;
+  let hue = 0;
+  for (const c of website.baseUrl) hue = (hue * 31 + c.charCodeAt(0)) >>> 0;
+  return {background: `hsl(${hue % 360} 70% 93%)`, color: `hsl(${hue % 360} 55% 34%)`};
 }
 
 // The icon captured at approval (AuthPage.vue)
@@ -146,10 +172,9 @@ function websiteIconSrc(website) {
           class="cursor-pointer select-none w-[112px] h-[112px] float-left m-5 border-0"
           draggable="true"
       >
-        <div class="flex flex-col truncate" :title="website.manifest?.startUrl || website.baseUrl">
-          <div class="text-center mb-2"><Avatar :image="websiteIconSrc(website)" :label="websiteIconSrc(website) ? null : websiteIconInitials(website)" size="large" shape="circle"/></div>
-          <div class="text-sm font-medium truncate text-center whitespace-nowrap overflow-hidden text-ellipsis max-w-full">{{website.manifest?.name}}</div>
-          <div class="text-xs font-mono truncate">{{(website.manifest?.startUrl || website.baseUrl || '').replace(/^https?:\/\//, '')}}</div>
+        <div class="flex flex-col" :title="website.manifest?.startUrl || website.baseUrl">
+          <div class="text-center mb-2"><Avatar :image="websiteIconSrc(website)" :label="websiteIconSrc(website) ? null : websiteIconInitials(website)" :style="websiteIconStyle(website)" size="large"/></div>
+          <div class="text-sm font-medium text-center line-clamp-2 whitespace-pre-line wrap-anywhere"><template v-for="(part, i) of websiteNameParts(website)" :key="i">{{ part }}<wbr/></template></div>
         </div>
       </div>
 
@@ -174,6 +199,14 @@ function websiteIconSrc(website) {
       <pre class="text-center text-xl tracking-widest select-all bg-gray-100 rounded p-4">{{ Helpers.formatLookupCode(identityRef.lookupCode) }}</pre>
       <p class="text-sm text-gray-500 mt-4">You may need this code to set up {{ identityRef.identifier }} on another device. On its own it does not let anyone sign in as you.</p>
     </Dialog>
+
+    <Dialog v-model:visible="renameVisible" modal header="Rename" :draggable="false" :style="{ width: 'min(90vw, 420px)' }">
+      <Textarea v-model="renameValue" :placeholder="websiteContextMenuSelectionRef?.manifest?.name" rows="2" maxlength="255" class="w-full" autofocus/>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" variant="outlined" @click="renameVisible = false"/>
+        <Button label="Save" @click="saveRename"/>
+      </template>
+    </Dialog>
   </div>
   <div v-else>
     <div class="m-20">
@@ -184,7 +217,16 @@ function websiteIconSrc(website) {
 </template>
 
 <style scoped>
-/* Captured icons are square with transparent padding; keep them whole inside the round avatar */
+/* Tiles are rounded squares on one plate, like a phone's home screen icons; captured icons are square with transparent padding */
+:deep(.p-avatar), :deep(.p-avatar img) {
+  border-radius: 22%;
+}
+:deep(.p-avatar) {
+  vertical-align: top;   /* the same label position under initials and under an image */
+}
+:deep(.p-avatar-image) {
+  background: var(--p-avatar-background);
+}
 :deep(.p-avatar img) {
   object-fit: contain;
 }

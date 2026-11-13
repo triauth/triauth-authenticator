@@ -39,6 +39,9 @@ export const SCHEMA = {
     'identityId': {type: 'number'},
     'baseUrl': {type: 'string'},
 
+    // The user's own name for the tile (home page); empty, the site's manifest.name shows
+    'name': {type: 'string', optional: true},
+
     // The site's self-description, as accepted by Helpers.sanitizeManifest (PROTOCOL.md §14.1)
     'manifest': {type: 'object', optional: true},
     'manifest.name': {type: 'string', optional: true},
