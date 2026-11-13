@@ -330,8 +330,11 @@
 
             <!-- The identifier step's answer carries over; when that step never had to ask, the records wait for one -->
             <template v-if="manages === 'other'">
-              <p class="mt-3">Download the zone file and forward it securely to the administrator of <strong>{{ identityDomainParts.parent }}</strong> or your IT team. The file tells them what to add.</p>
-              <p class="mt-3"><Button @click="exportZoneFile">Download zone file</Button></p>
+              <p class="mt-3">{{ canShareFiles ? 'Share' : 'Download' }} the zone file and forward it securely to the administrator of <strong>{{ identityDomainParts.parent }}</strong> or your IT team. The file tells them what to add.</p>
+              <p class="mt-3 flex flex-wrap items-center gap-2">
+                <Button v-if="canShareFiles" @click="shareZoneFile">Share zone file</Button>
+                <Button :variant="canShareFiles ? 'outlined' : undefined" @click="exportZoneFile">Download zone file</Button>
+              </p>
               <p class="mt-3">You can finish the setup now. This device keeps its keys, and signing in works as soon as the administrator has made the changes.</p>
             </template>
             <template v-else-if="manages">
@@ -346,7 +349,10 @@
               add {{ these(dnsEntries.toAdd, 'TXT record') }} for the <strong><span class="_sel" :title="copyTitle" @click="selectFragment">{{identityDomainParts.prefix}}</span><wbr/><span style="opacity:0.7;">{{identityDomainParts.suffix}}</span></strong> subdomain<template v-if="dnsHost?.zoneImport">. The easiest way is to import a zone file:</template><template v-else>:</template>
             </p>
             <template v-if="dnsHost?.zoneImport">
-              <p class="mt-3"><Button @click="exportZoneFile">Download zone file</Button></p>
+              <p class="mt-3 flex flex-wrap items-center gap-2">
+                <Button @click="exportZoneFile">Download zone file</Button>
+                <Button v-if="canShareFiles" variant="outlined" @click="shareZoneFile">Share zone file</Button>
+              </p>
               <p class="mt-3">Or add {{ dnsEntries.toAdd.length === 1 ? 'it' : 'them' }} by hand:</p>
             </template>
             <pre class="_code _code-compact text-left"><span v-for="(rec, i) of dnsEntries.toAdd" :key="i" style="display:block;"><span style="opacity:0.5;"><span class="_sel" :title="copyTitle" @click="selectFragment">{{ identityDomainParts.prefix }}</span>{{ identityDomainParts.suffix }} TXT </span>"<span class="_sel" :title="copyTitle" @click="selectFragment">{{ rec }}</span>"</span></pre>
@@ -378,7 +384,10 @@
               </tbody>
             </table>
 
-            <p class="mt-3" v-if="!dnsHost?.zoneImport"><Button size="small" variant="outlined" @click="exportZoneFile">Download zone file</Button></p>
+            <p class="mt-3 flex flex-wrap items-center gap-2" v-if="!dnsHost?.zoneImport">
+              <Button size="small" variant="outlined" @click="exportZoneFile">Download zone file</Button>
+              <Button v-if="canShareFiles" size="small" variant="outlined" @click="shareZoneFile">Share zone file</Button>
+            </p>
             <p class="mt-3">Stuck? The <a href="https://www.triauth.org/identity/get-started#step-5-publish-your-records" target="_blank" rel="noopener noreferrer" class="underline">getting started guide</a> walks you through this step.</p>
             </template>
           </div>
@@ -940,11 +949,13 @@ const zoneFile = () => {
   return [...lines, '', ...linesFor(toAdd), ''].join('\n');
 };
 
+const zoneFileName = () => `triauth-${identityWhois.value.identityDomain}.txt`;
+
 const exportZoneFile = () => {
   const url = URL.createObjectURL(new Blob([zoneFile()], {type: 'text/plain;charset=utf-8'}));
   const link = Object.assign(
     document.createElement('a'),
-    {href: url, download: `triauth-${identityWhois.value.identityDomain}.txt`}
+    {href: url, download: zoneFileName()}
   );
 
   document.body.appendChild(link);
@@ -953,6 +964,15 @@ const exportZoneFile = () => {
 
   // The file is rebuilt on every click, so release the URL once the browser has taken its copy
   setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
+// Phones hand the file straight to the share sheet (messaging, AirDrop, "Save to Files"), which spares the trip
+// through the Downloads folder. The check needs a real File: an empty list makes Chrome answer false.
+const canShareFiles = typeof navigator.canShare === 'function'
+  && navigator.canShare({files: [new File(['x'], 'x.txt', {type: 'text/plain'})]});
+const shareZoneFile = () => {
+  const name = zoneFileName();
+  navigator.share({files: [new File([zoneFile()], name, {type: 'text/plain'})], title: name}).catch(() => {});
 };
 
 const dnsRecordsVerified = ref(undefined);
