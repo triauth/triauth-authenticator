@@ -59,14 +59,6 @@ const websitesRef = computed(() => Object.values(websites));
 
 const openWebsite = (website) => {
   const url = website.manifest?.startUrl || website.baseUrl;
-
-  // When in Android PWA, use intent URLs to launch a proper web browser
-  if (isAndroid() && isStandalone()) {
-    const u = new URL(url);
-    window.location.href = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.slice(0, -1)};action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(url)};end`;
-    return;
-  }
-
   const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
   if (newWindow) { newWindow.opener = null; } // just to stay extra-safe
 }
@@ -170,7 +162,6 @@ function websiteIconSrc(website) {
           @click.prevent="openWebsite(website)"
           @contextmenu.prevent="showWebsiteContextMenu($event, website)"
           class="cursor-pointer select-none w-[112px] h-[112px] float-left m-5 border-0"
-          draggable="true"
       >
         <div class="flex flex-col" :title="website.manifest?.startUrl || website.baseUrl">
           <div class="text-center mb-2"><Avatar :image="websiteIconSrc(website)" :label="websiteIconSrc(website) ? null : websiteIconInitials(website)" :style="websiteIconStyle(website)" size="large"/></div>
