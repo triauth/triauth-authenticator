@@ -73,7 +73,7 @@ db.sweepExpired('verifications').catch((err) => Triauth.config.logger.error(err)
     </Transition>
   </main>
 
-  <!-- Durability nudge only on the identity/home views - never over the wizard or welcome -->
+  <!-- Durability nudge and the persist() request only on the identity/home views - never over the wizard or welcome -->
   <StorageDurabilityBanner v-if="currentView === IndexPage || currentView === HomePage"/>
 
   <Footer/>

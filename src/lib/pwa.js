@@ -23,8 +23,8 @@ import { ref } from 'vue';
 // - iOS home-screen web apps have a storage partition SEPARATE from Safari: installing
 //   one does not make its storage available to browser-based authentication redirects.
 
-// The service worker and the eager persist() request belong to the manage app only;
-// the flow pages (auth/sign/attest/ping/stamp) keep worker-src 'none' in their CSP.
+// The service worker belongs to the manage app only; the flow pages (auth/sign/attest/ping/stamp)
+// keep worker-src 'none' in their CSP.
 const onManagePage = ['/', '/index.html'].includes(window.location.pathname);
 
 ////
@@ -82,6 +82,8 @@ export const isAndroid = () => /Android/.test(navigator.userAgent);
 ////
 // Persistent storage
 // null = unknown or unsupported; true/false = the persisted() verdict.
+// Requested by StorageDurabilityBanner (identity views only), not at boot: Firefox
+// prompts for persist(), and the welcome page is no place for that.
 
 export const persistedRef = ref(null);
 
@@ -130,8 +132,6 @@ export function clearBannerDismissal() {
 // Boot (manage app only)
 
 if (onManagePage) {
-  refreshPersisted();
-
   // Bookmarking is one of Chromium's silent persist() grant triggers, but nothing
   // notifies the page about it - re-check when the window regains focus (e.g. right
   // after the user finishes the browser's bookmark popup) so the durability nudge can

@@ -14,6 +14,12 @@ import {
 
 import CloseIcon from '../../vendor/material-icons/Close.vue';
 
+// First persist() request: this card is mounted on the identity views only, so it comes once there are keys to
+// protect (Firefox prompts for it). The verdict outlives the card, so a remount does not ask again.
+if (persistedRef.value === null) {
+  refreshPersisted();
+}
+
 // WebKit browsers require regular interaction even when persist() reports success.
 // Standalone WebKit apps are exempt from that inactivity rule, but on iOS their storage is isolated.
 const activityRequired = (isIos() || isSafari()) && !isStandalone();
