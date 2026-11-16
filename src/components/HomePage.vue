@@ -141,16 +141,17 @@ function websiteIconSrc(website) {
 
 <template>
   <div v-if="identityRef">
-    <Toolbar class="rounded-4xl min-w-[100vw]">
+    <Toolbar class="rounded-4xl min-w-[100vw]" :pt="{start: {class: 'shrink-0'}, end: {class: 'min-w-0'}}">
       <template #start>
-        <a href="#index" class="size-6 text-xl text-center ml-2 cursor-pointer"><strong>⠕</strong></a>
+        <!-- The mark keeps the name beside it until the glyph is known on its own; the identifier gives way on narrow screens -->
+        <a href="#index" class="flex items-center gap-2 ml-2 cursor-pointer"><strong class="text-xl leading-none">⠕</strong><strong class="leading-none mb-1">triauth</strong></a>
       </template>
 
       <template #end>
-        <div class="flex items-center gap-2">
-          <div class="my-2 flex items-center mr-4">
-            <div class="text-left">{{ identityRef.identifier }}</div>
-            <div class="ml-4 size-6 cursor-pointer" @click.prevent="showContextMenu"><MoreVertIcon/></div>
+        <div class="flex items-center gap-2 min-w-0">
+          <div class="my-2 flex items-center mr-4 min-w-0">
+            <div class="text-left truncate">{{ identityRef.identifier }}</div>
+            <div class="ml-4 size-6 shrink-0 cursor-pointer" @click.prevent="showContextMenu"><MoreVertIcon/></div>
           </div>
         </div>
       </template>
