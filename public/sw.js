@@ -37,6 +37,12 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
+  // Flow-page navigations are not intercepted: Firefox drops document.referrer on a
+  // navigation answered by a worker (Bugzilla 1809622), and the flow pages check it.
+  if (request.mode === 'navigate' && !['/', '/index.html'].includes(new URL(request.url).pathname)) {
+    return;
+  }
+
   event.respondWith((async function () {
     const cache = await caches.open(CACHE_NAME);
     try {
