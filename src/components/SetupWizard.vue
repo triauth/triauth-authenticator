@@ -179,11 +179,7 @@
 
     <div v-if="step === 'lookupCode'">
       <div class="flex flex-col gap-3">
-        <h2 class="text-xl font-bold text-left mb-8">Lookup code</h2>
-
-        <Message size="small" severity="secondary" variant="simple" class="text-left mb-3">
-          <strong>{{ identifierDomain }}</strong> stores identity records under names that can only be derived with a lookup code.
-        </Message>
+        <h2 class="text-xl font-bold text-left mb-8">Is this your first setup?</h2>
 
         <div class="flex items-center gap-3 text-left">
           <RadioButton v-model="lookupCodeSource" inputId="lookupCodeNew" value="new"/>
@@ -255,11 +251,9 @@
 
     <div v-if="step === 'factors'">
       <div class="flex flex-col gap-3">
-        <h2 class="text-xl font-bold text-left ">Authentication factors</h2>
+        <h2 class="text-xl font-bold text-left">Extra protection <span class="font-normal text-gray-500">(optional)</span></h2>
         <Message size="small" severity="secondary" variant="simple" class="text-left mb-5">
-          Configure additional authentication factors to strengthen security.
-          <br/><br/>
-          Triauth supports all three factor types — something you know, something you have, and something you are — so you can combine them for maximum protection.
+          You can add a passphrase-protected key or a security key.
         </Message>
 
         <TransitionGroup name="slide" tag="div">
@@ -271,14 +265,11 @@
             </div>
             <div class="ml-4 grow">
               {{signer.t.title}}
-              <div class="mt-3 flex flex-wrap gap-2">
-                <Tag v-if="signer.factor" severity="secondary">Something you {{ signer.factor }}</Tag>
-                <Tag severity="secondary" v-if="signer == signers[0]">Default</Tag>
-              </div>
+              <div class="mt-3" v-if="signer === signers[0]"><Tag severity="secondary">Default</Tag></div>
             </div>
             <a href @click.prevent="signers = signers.filter((s) => s !== signer)" class="" v-if="signers.length > 1 && signer !== signers[0]"><CloseIcon/></a>
           </div>
-          <div :key="'z'" class="text-right">
+          <div :key="'z'" class="text-left">
             <Button variant="text" @click.prevent="showAuthenticationMethodsMenu($event)" :disabled="signers.length >= triauthLimits.maxKeysPerDevice">+ add another</Button>
           </div>
         </TransitionGroup>
@@ -949,7 +940,7 @@ const zoneFile = () => {
   return [...lines, '', ...linesFor(toAdd), ''].join('\n');
 };
 
-const zoneFileName = () => `triauth-${identityWhois.value.identityDomain}.txt`;
+const zoneFileName = () => `triauth-${identityWhois.value.identifier}-${deviceName.value}.txt`;
 
 const exportZoneFile = () => {
   const url = URL.createObjectURL(new Blob([zoneFile()], {type: 'text/plain;charset=utf-8'}));
