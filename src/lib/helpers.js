@@ -359,15 +359,10 @@ export const Helpers = {
       .join('');
   },
 
-  // Private-mode lookup code: 16 uniform characters of A-Z0-9
+  // Private-mode lookup code: 16 characters, no 0/O or 1/I (the protocol accepts [A-Z0-9]{16})
   generateLookupCode: () => {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let code = '';
-    while (code.length < 16) {
-      const [byte] = crypto.getRandomValues(new Uint8Array(1));
-      if (byte < 252) code += alphabet[byte % 36];   // 252 = 7 * 36 keeps the modulo unbiased
-    }
-    return code;
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => alphabet[byte % 32]).join('');
   },
 
   formatLookupCode: (code) => code.match(/.{4}/g).join('-'),
