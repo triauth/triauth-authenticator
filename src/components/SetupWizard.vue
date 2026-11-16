@@ -18,151 +18,142 @@
       <div class="flex flex-col gap-3">
         <h2 class="text-xl font-bold text-left mb-8">Let's get you registered on this device</h2>
         <label for="identifier" class="text-left">Your Identifier</label>
-        <InputText id="identifier" v-model="identifier" @input="validateIdentifier" @keydown.enter.prevent="submitField" @keydown.esc.prevent="close" aria-describedby="identifier-help" placeholder="e.g., john@example.com" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus/>
+        <InputText id="identifier" v-model="identifier" @input="resetIdentifier" @keydown.enter.prevent="continueIdentifier" @keydown.esc.prevent="close" aria-describedby="identifier-help" placeholder="e.g., john@example.com" inputmode="email" enterkeyhint="go" autocapitalize="none" autocorrect="off" spellcheck="false" autofocus/>
         <Message size="small" severity="secondary" variant="simple" class="text-left min-w-0" :pt="{contentWrapper: {class: 'min-w-0'}, text: {class: 'min-w-0 grow'}}" v-if="!identifierError" id="identifier-help">
-          <div v-if="!identifier" style="line-height: 1.75em;">
+          <div class="_status" v-if="whoisResponse?.error">
+            <span>✕</span>An error has occurred - {{whoisResponse.error.message}}
+          </div>
+          <div v-else-if="unsupportedMailProvider">
+            <div class="_status"><span>✕</span>Domain is not configured for triauth</div>
+
+            <div class="_dns-hint mt-3 p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed">
+              <div class="_status">
+                <InfoIcon class="_info" aria-hidden="true"/>
+                <p class="_lead"><strong>{{ identifierDomain }}</strong> does not support triauth yet. Your identifier has to be at a domain you own.</p>
+                <p class="mt-3">If you do not have one, you can buy a domain in a few minutes.</p>
+                <p class="mt-3"><Button as="a" href="https://www.cloudflare.com/domains/" target="_blank" rel="noopener noreferrer" variant="outlined" size="small" class="_ext">Find your new domain with Cloudflare Registrar<OpenInNewIcon aria-hidden="true"/></Button></p>
+                <p class="mt-3">Besides triauth, you can use the same domain for personalized email, websites, and more.</p>
+                <p class="mt-3">If your organization has its own domain, you can use your work email address instead.</p>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="whoisResponse?.nxdomain">
+            <div class="_status"><span>✕</span>Domain not found</div>
+
+            <div class="_dns-hint mt-3 p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed">
+              <div class="_status">
+                <InfoIcon class="_info" aria-hidden="true"/>
+                <p class="_lead">Check spelling. There seems to be no <strong>{{ identifierDomain }}</strong> domain.</p>
+                <p class="mt-3">If you like the name, you can try to buy the domain and claim your unique identifier in just a few minutes.</p>
+                <p class="mt-3"><Button as="a" :href="'https://www.cloudflare.com/domains/search?q=' + encodeURIComponent(identifierDomain)" target="_blank" rel="noopener noreferrer" variant="outlined" size="small" class="_ext">Check availability with Cloudflare Registrar<OpenInNewIcon aria-hidden="true"/></Button></p>
+                <p class="mt-3">Besides triauth, you can use the same domain for personalized email, websites, and more.</p>
+              </div>
+            </div>
+          </div>
+          <div class="_status" v-else-if="whoisResponse?.originMismatch">
+            <span>✕</span>Please use <a :href="whoisResponse.authenticationEndpoint.url" rel="noreferrer" class="wrap-anywhere">{{whoisResponse.authenticationEndpoint.url}}</a>
+          </div>
+          <div class="_status" v-else-if="whoisResponse?.modeMismatch">
+            <span>✕</span>This domain is configured with an unsupported mode
+          </div>
+          <div v-else style="line-height: 1.75em;">
             <p>You will use it to sign in to websites without a password. Create a new identifier or enter one you already have. It can be your email address.</p>
             <p class="mt-2">New to triauth? <a href="https://www.triauth.org/identity/get-started" target="_blank" rel="noopener noreferrer" class="underline inline-block">See what you need to get started.</a></p>
-          </div>
-          <div v-else>
-            <div class="_status"><span>✓</span>Identifier format is fine</div>
-
-            <div class="_status" v-if="!whoisResponse">
-              <span>-</span>please wait ...
-            </div>
-            <div class="_status" v-else-if="whoisResponse.error">
-              <span>✕</span>An error has occurred - {{whoisResponse.error.message}}
-            </div>
-            <div v-else-if="unsupportedMailProvider">
-              <div class="_status"><span>✕</span>Domain is not configured for triauth</div>
-
-              <div class="_dns-hint mt-3 p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed">
-                <div class="_status">
-                  <InfoIcon class="_info" aria-hidden="true"/>
-                  <p class="_lead"><strong>{{ identifierDomain }}</strong> does not support triauth yet. Your identifier has to be at a domain you own.</p>
-                  <p class="mt-3">If you do not have one, you can buy a domain in a few minutes.</p>
-                  <p class="mt-3"><Button as="a" href="https://www.cloudflare.com/domains/" target="_blank" rel="noopener noreferrer" variant="outlined" size="small" class="_ext">Find your new domain with Cloudflare Registrar<OpenInNewIcon aria-hidden="true"/></Button></p>
-                  <p class="mt-3">Besides triauth, you can use the same domain for personalized email, websites, and more.</p>
-                  <p class="mt-3">If your organization has its own domain, you can use your work email address instead.</p>
-                </div>
-              </div>
-            </div>
-            <div v-else-if="whoisResponse.nxdomain">
-              <div class="_status"><span>✕</span>Domain not found</div>
-
-              <div class="_dns-hint mt-3 p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed">
-                <div class="_status">
-                  <InfoIcon class="_info" aria-hidden="true"/>
-                  <p class="_lead">Check spelling. There seems to be no <strong>{{ identifierDomain }}</strong> domain.</p>
-                  <p class="mt-3">If you like the name, you can try to buy the domain and claim your unique identifier in just a few minutes.</p>
-                  <p class="mt-3"><Button as="a" :href="'https://www.cloudflare.com/domains/search?q=' + encodeURIComponent(identifierDomain)" target="_blank" rel="noopener noreferrer" variant="outlined" size="small" class="_ext">Check availability with Cloudflare Registrar<OpenInNewIcon aria-hidden="true"/></Button></p>
-                  <p class="mt-3">Besides triauth, you can use the same domain for personalized email, websites, and more.</p>
-                </div>
-              </div>
-            </div>
-            <div v-else-if="whoisResponse.status === -1">
-              <div class="_status"><span>✕</span>Domain is not configured for triauth</div>
-
-              <div class="_dns-hint mt-3 p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed">
-                <div class="_status">
-                  <InfoIcon class="_info" aria-hidden="true"/>
-                  <div class="_lead">
-                    Who manages the <strong>{{ identifierDomain }}</strong> domain?
-                    <div class="mt-2"><SelectButton v-model="manages" :options="managesOptions" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" aria-label="Who manages the domain"/></div>
-                  </div>
-
-                  <template v-if="manages === 'me'">
-                    <p class="mt-3" v-if="whoisResponse.brokenRecord">
-                      The <strong>{{ identifierDomain }}</strong> domain has a broken triauth record.
-                      Replace it with the single TXT record below:
-                    </p>
-                    <p class="mt-3" v-else-if="dnsHost?.name">
-                      Sign in to <a :href="dnsHost.url" target="_blank" rel="noopener noreferrer" class="underline">{{ dnsHost.name }}</a>, which hosts the DNS records of <strong>{{ identifierDomain }}</strong>, and add the TXT record below:
-                    </p>
-                    <p class="mt-3" v-else>
-                      Sign in to the DNS panel of <strong>{{ identifierDomain }}</strong> and add the TXT record below to its DNS settings:
-                    </p>
-
-                    <pre class="_code _code-compact text-left"><span style="opacity:0.5;user-select:none;">{{ identifierDomain }} TXT </span>"<span class="_sel" :title="copyTitle" @click="selectFragment">triauth {{ endpointHost }}</span>"</pre>
-
-                    <table class="_record mt-3" aria-label="DNS TXT record to add">
-                      <tbody>
-                      <tr>
-                        <th scope="row">Host / Name</th>
-                        <td>
-                          <template v-if="!dnsHost?.name && hostField === identifierDomain">In this field, most panels take <code class="_sel" :title="copyTitle" @click="selectFragment">@</code> or an empty field for the domain itself. A few take the full name <code class="_sel" :title="copyTitle" @click="selectFragment">{{ identifierDomain }}</code>.</template>
-                          <template v-else-if="hostField === ''">Leave this field empty</template>
-                          <template v-else>
-                            <code class="_sel" :title="copyTitle" @click="selectFragment">{{ hostField }}</code>
-                            <template v-if="!dnsHost?.name"><br/>A few panels take the full name <code class="_sel" :title="copyTitle" @click="selectFragment">{{ identifierDomain }}</code> instead.</template>
-                          </template>
-                        </td>
-                      </tr>
-                      <tr>
-                        <th scope="row">Record Type</th>
-                        <td><code>TXT</code></td>
-                      </tr>
-                      <tr>
-                        <th scope="row">Value / Content</th>
-                        <td><code class="_sel" :title="copyTitle" @click="selectFragment">triauth {{ endpointHost }}</code></td>
-                      </tr>
-                      <tr>
-                        <th scope="row">TTL</th>
-                        <td>Leave the default value</td>
-                      </tr>
-
-                      </tbody>
-                    </table>
-
-                    <p class="mt-3">Stuck? The <a href="https://www.triauth.org/identity/get-started" target="_blank" rel="noopener noreferrer" class="underline">getting started guide</a> walks you through this step.</p>
-                  </template>
-
-                  <template v-else-if="manages === 'other'">
-                    <template v-if="whoisResponse.brokenRecord">
-                      <p class="mt-3">The domain has a broken triauth record. Ask whoever manages the domain to fix it.</p>
-                    </template>
-                    <template v-else>
-                      <p class="mt-3">Ask whoever manages it to enable triauth for the domain. That is usually the person who registered the domain, or your IT team.</p>
-                      <p class="mt-3"><Button size="small" variant="outlined" @click="askVisible = true">Show the message to send</Button></p>
-                    </template>
-                    <p class="mt-3">When it is done, come back and click <strong>Check again</strong>.</p>
-                  </template>
-                </div>
-              </div>
-            </div>
-            <div class="_status" v-else-if="whoisResponse.originMismatch">
-              <span>✕</span>Please use <a :href="whoisResponse.authenticationEndpoint.url" rel="noreferrer" class="wrap-anywhere">{{whoisResponse.authenticationEndpoint.url}}</a>
-            </div>
-            <div class="_status" v-else-if="whoisResponse.modeMismatch">
-              <span>✕</span>This domain is configured with an unsupported mode
-            </div>
-            <div v-else-if="isPrivate">
-              <div class="_status"><span>✓</span>Domain is configured for triauth</div>
-            </div>
-            <div v-else-if="whoisResponse.status === 0">
-              <div class="_status"><span>✓</span>Domain is configured for triauth</div>
-              <div class="_status mt-3"><InfoIcon class="_info" aria-hidden="true"/>You are configuring this identifier for the first time</div>
-            </div>
-            <div v-else-if="whoisResponse.status === 1">
-              <div class="_status"><span>✓</span>Domain is configured for triauth</div>
-              <div class="_status mt-3"><InfoIcon class="_info" aria-hidden="true"/>You have {{whoisResponse.devices.length}} device(s) already configured</div>
-            </div>
           </div>
         </Message>
         <Message size="small" severity="warn" variant="simple" class="text-left" v-if="privateWindow">
           <div class="_status"><InfoIcon class="_info" aria-hidden="true"/>This looks like a private browsing window. Sign-in keys created here would be lost when it closes, so use a normal window instead.</div>
         </Message>
-        <Message size="small" severity="error" variant="simple" class="text-left" v-if="recheck === 'unchanged'">
-          <div class="_status"><span>✕</span>The record is not visible yet. DNS changes can take a few minutes to show up. If it has been a while, see the <a href="https://www.triauth.org/identity/troubleshooting#domain-is-not-configured-for-triauth" target="_blank" rel="noopener noreferrer" class="underline">troubleshooting guide</a>.</div>
-        </Message>
         <Message size="small" severity="error" variant="simple" class="text-left" v-if="identifierError">
           <div class="_status"><span>✕</span>{{identifierError}}</div>
         </Message>
-
-        <Button class="_recheck" :loading="recheck === 'pending'" @click="recheckDomain" v-if="canRecheck">Check again</Button>
-        <Button class="mt-10" :disabled="!canContinue" @click="next">Continue</Button>
+        <Button class="mt-10" :disabled="!identifier || looking" :loading="looking" @click="continueIdentifier">Continue</Button>
         <Button variant="text" as="a" href="#index" size="small" v-if="cancellable">cancel</Button>
         <Button v-for="entry of testIdentitiesRef" :key="entry.identifier" @click="addTestIdentity(entry)" variant="text" as="a">add test identity {{ entry.identifier }}</Button>
+      </div>
+    </div>
+
+    <div v-if="step === 'domain'">
+      <div class="flex flex-col gap-3">
+        <h2 class="text-xl font-bold text-left">Set up your domain</h2>
+        <Message size="small" severity="secondary" variant="simple" class="text-left mb-5">
+          <strong>{{ identifierDomain }}</strong> is not configured for triauth yet.<br/>Setting it up is a one-time change in its DNS settings.
+        </Message>
+
+        <div class="_dns-hint p-3 rounded-md border border-gray-200 bg-gray-50 leading-relaxed text-left">
+          <div class="_status">
+            <InfoIcon class="_info" aria-hidden="true"/>
+            <div class="_lead">
+              Who manages the <strong>{{ identifierDomain }}</strong> domain?
+              <div class="mt-2"><SelectButton v-model="manages" :options="managesOptions" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" aria-label="Who manages the domain"/></div>
+            </div>
+
+            <template v-if="manages === 'me'">
+              <p class="mt-3" v-if="whoisResponse.brokenRecord">
+                The <strong>{{ identifierDomain }}</strong> domain has a broken triauth record.
+                Replace it with the single TXT record below:
+              </p>
+              <p class="mt-3" v-else-if="dnsHost?.name">
+                Sign in to <a :href="dnsHost.url" target="_blank" rel="noopener noreferrer" class="underline">{{ dnsHost.name }}</a>, which hosts the DNS records of <strong>{{ identifierDomain }}</strong>, and add the TXT record below:
+              </p>
+              <p class="mt-3" v-else>
+                Sign in to the DNS panel of <strong>{{ identifierDomain }}</strong> and add the TXT record below to its DNS settings:
+              </p>
+
+              <pre class="_code _code-compact text-left"><span style="opacity:0.5;user-select:none;">{{ identifierDomain }} TXT </span>"<span class="_sel" :title="copyTitle" @click="selectFragment">triauth {{ endpointHost }}</span>"</pre>
+
+              <table class="_record mt-3" aria-label="DNS TXT record to add">
+                <tbody>
+                <tr>
+                  <th scope="row">Host / Name</th>
+                  <td>
+                    <template v-if="!dnsHost?.name && hostField === identifierDomain">In this field, most panels take <code class="_sel" :title="copyTitle" @click="selectFragment">@</code> or an empty field for the domain itself. A few take the full name <code class="_sel" :title="copyTitle" @click="selectFragment">{{ identifierDomain }}</code>.</template>
+                    <template v-else-if="hostField === ''">Leave this field empty</template>
+                    <template v-else>
+                      <code class="_sel" :title="copyTitle" @click="selectFragment">{{ hostField }}</code>
+                      <template v-if="!dnsHost?.name"><br/>A few panels take the full name <code class="_sel" :title="copyTitle" @click="selectFragment">{{ identifierDomain }}</code> instead.</template>
+                    </template>
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Record Type</th>
+                  <td><code>TXT</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">Value / Content</th>
+                  <td><code class="_sel" :title="copyTitle" @click="selectFragment">triauth {{ endpointHost }}</code></td>
+                </tr>
+                <tr>
+                  <th scope="row">TTL</th>
+                  <td>Leave the default value</td>
+                </tr>
+
+                </tbody>
+              </table>
+
+              <p class="mt-3">Stuck? The <a href="https://www.triauth.org/identity/get-started" target="_blank" rel="noopener noreferrer" class="underline">getting started guide</a> walks you through this step.</p>
+            </template>
+
+            <template v-else-if="manages === 'other'">
+              <template v-if="whoisResponse.brokenRecord">
+                <p class="mt-3">The domain has a broken triauth record. Ask whoever manages the domain to fix it.</p>
+              </template>
+              <template v-else>
+                <p class="mt-3">Ask whoever manages it to enable triauth for the domain. That is usually the person who registered the domain, or your IT team.</p>
+                <p class="mt-3"><Button size="small" variant="outlined" @click="askVisible = true">Show the message to send</Button></p>
+              </template>
+              <p class="mt-3">When it is done, click <strong>Check again</strong>. You can also close this page and come back later. Nothing is saved yet, so just enter your identifier again.</p>
+            </template>
+          </div>
+        </div>
+        <Message size="small" severity="error" variant="simple" class="text-left" v-if="whoisResponse?.error">
+          <div class="_status"><span>✕</span>An error has occurred - {{whoisResponse.error.message}}</div>
+        </Message>
+        <Message size="small" severity="error" variant="simple" class="text-left" v-if="recheck === 'unchanged'">
+          <div class="_status"><span>✕</span>The record is not visible yet. DNS changes can take a few minutes to show up. If it has been a while, see the <a href="https://www.triauth.org/identity/troubleshooting#domain-is-not-configured-for-triauth" target="_blank" rel="noopener noreferrer" class="underline">troubleshooting guide</a>.</div>
+        </Message>
+        <Button class="mt-10" :loading="recheck === 'pending'" @click="recheckDomain" autofocus>Check again</Button>
+        <Button @click="prev" variant="text" size="small">&laquo; go back</Button>
       </div>
 
       <Dialog v-model:visible="askVisible" modal :header="'Ask whoever manages ' + identifierDomain" :draggable="false" :style="{width: 'min(95vw, 36rem)'}">
@@ -235,6 +226,7 @@
           <div v-else-if="!deviceName">
             <p>What would you like to call this device?</p>
             <p class="mt-2">This name will be publicly visible in your identity records.</p>
+            <p class="mt-2" v-if="identityWhois?.devices?.length">You have {{ identityWhois.devices.length }} device(s) already configured.</p>
           </div>
           <div class="_status" v-else-if="deviceNameExists">
             <span>✕</span>A device with this name already exists
@@ -417,7 +409,6 @@
 
 <script setup>
 import {ref, computed, watch, nextTick, shallowRef, reactive, onMounted, onUnmounted, toRaw} from 'vue';
-import { useDebounceFn } from '@vueuse/core';
 import { db } from '../db/db.js'
 import { Helpers } from '../lib/helpers.js'
 import { isRegistrable, servesDomain, NOT_SERVED_MESSAGE, MAIL_PROVIDER_DOMAINS } from '../lib/domains.js'
@@ -441,7 +432,7 @@ import WebauthnSigner from "../signers/webauthn.js";
 
 import {clearBannerDismissal, isFirefox, isSafari, isIos} from "../lib/pwa.js";
 
-const STEPS = ['identifier', 'lookupCode', 'device', 'factors', 'publicProfile', 'dns'];
+const STEPS = ['identifier', 'domain', 'lookupCode', 'device', 'factors', 'publicProfile', 'dns'];
 const step = ref(STEPS[0]);
 
 const cancellable = ref(false);
@@ -506,9 +497,9 @@ const submitField = (e) => {
   }
 };
 
-// Two steps depend on the domain's mode, decided at each transition: the lookup code exists only for
-// private-mode domains, and the public profile is shown only for public-mode ones
-const skipped = (s) => (s === 'lookupCode' && !isPrivate.value) || (s === 'publicProfile' && isPrivate.value);
+// Three steps depend on the lookup, decided at each transition: the domain setup exists only for a domain without a
+// usable record, the lookup code only for private-mode domains, and the public profile only for public-mode ones
+const skipped = (s) => (s === 'domain' && !needsDomainSetup.value) || (s === 'lookupCode' && !isPrivate.value) || (s === 'publicProfile' && isPrivate.value);
 const go = (dir) => {
   let i = STEPS.indexOf(step.value) + dir;
   while (skipped(STEPS[i])) i += dir;
@@ -555,10 +546,12 @@ const identifierError = ref(null);
 const whoisResponse = ref(null);
 const dnsHost = ref(null);   // the zone holding the domain, with {name, url, zoneImport, apex} of its DNS host when recognised
 const isPrivate = computed(() => whoisResponse.value?.authenticationEndpoint?.options?.mode === 'private');
-const recheck = ref(null);   // "Check again": null | 'pending' | 'unchanged'
+const recheck = ref(null);   // "Check again" on the domain step: null | 'pending' | 'unchanged'
+const looking = ref(false);  // Continue is looking the domain up
 
 const canContinue = computed(() => whoisResponse.value?.status >= 0 && !whoisResponse.value.originMismatch && !whoisResponse.value.modeMismatch);
-const canRecheck = computed(() => !identifierError.value && !!whoisResponse.value && !canContinue.value && !unsupportedMailProvider.value);
+// A domain without a usable record gets its own step; one that does not exist, or a consumer mail provider's, asks for another identifier instead
+const needsDomainSetup = computed(() => whoisResponse.value?.status === -1 && !whoisResponse.value.nxdomain && !unsupportedMailProvider.value);
 
 // Domain part of the identifier (e.g. 'example.com' for 'john@example.com') and the hostname of
 // this authenticator — used to show the DNS setup hint when a domain isn't configured for triauth.
@@ -598,17 +591,16 @@ const askMailto = computed(() => `mailto:${askRecipients.value.join(',')}?subjec
 const canShare = typeof navigator.share === 'function';
 const shareAsk = () => navigator.share({title: askSubject.value, text: askMessage.value}).catch(() => {});
 
-const validateIdentifier = async () => {
-  identifier.value = identifier.value.toLowerCase();
-
-  // Every edit invalidates the previous lookup. An emptied field shows the intro again.
+// Every edit clears the previous verdict; nothing is checked until Continue
+const resetIdentifier = () => {
+  identifierError.value = null;
   whoisResponse.value = null;
   dnsHost.value = null;
   recheck.value = null;
-  if (identifier.value === '') {
-    identifierError.value = null;
-    return;
-  }
+};
+
+const validateIdentifier = async () => {
+  identifier.value = identifier.value.toLowerCase();
 
   identifierError.value = Triauth.validate({identifier:identifier.value}, triauthConfig).errors[0]?.message;
 
@@ -624,9 +616,18 @@ const validateIdentifier = async () => {
   ) {
     identifierError.value = 'Identifier is already configured on this device';
   }
-
-  whoisIdentifier();
 }
+
+// Continue: the format checks, then the lookup, then the step its answer calls for; any other answer shows under the field
+const continueIdentifier = async () => {
+  if (!identifier.value || looking.value) return;
+  await validateIdentifier();
+  if (identifierError.value) return;
+  looking.value = true;
+  await lookupIdentifier();
+  looking.value = false;
+  if (canContinue.value || needsDomainSetup.value) next();
+};
 
 // Known DNS hosts, told apart by the primary nameserver of a zone
 const DNS_HOSTS = [
@@ -680,32 +681,16 @@ const lookupIdentifier = async () => {
   if (!response.error && !response.nxdomain) findDnsHost(currentIdentifier.split('@')[1]).then((host) => { if (currentIdentifier === identifier.value) dnsHost.value = host; });
 };
 
-const whoisIdentifier = useDebounceFn(async () => {
-  whoisResponse.value = null;
-  if (identifier.value && !identifierError.value) await lookupIdentifier();
-}, 750);
-
+// "Check again" on the domain step: the record landed, so move on; the domain is gone or misconfigured in a new way, so
+// the identifier step shows that; a resolver error or no change stays here
 const recheckDomain = async () => {
-  const currentIdentifier = identifier.value;
-
-  // for nxdomain, do the whole validation again on recheck
-  if (whoisResponse.value?.nxdomain) {
-    whoisResponse.value = null;
-    recheck.value = null;
-    await lookupIdentifier();
-    return;
-  }
-
-  // otherwise show helpful error
-  const wasUnconfigured = whoisResponse.value?.status === -1;
   recheck.value = 'pending';
   await lookupIdentifier();
-  if (currentIdentifier !== identifier.value) return;
-  recheck.value = wasUnconfigured && whoisResponse.value?.status === -1 && !whoisResponse.value.nxdomain ? 'unchanged' : null;
+  const response = whoisResponse.value;
+  recheck.value = response?.status === -1 && !response.nxdomain ? 'unchanged' : null;
+  if (canContinue.value) next();
+  else if (!response?.error && !needsDomainSetup.value) prev();
 };
-
-// If identifier is set at setup (e.g., passed as a parameter), start validation manually
-if (identifier.value) { validateIdentifier(); }
 
 ////////////
 // Step - lookup code (private-mode domains only)
@@ -1130,8 +1115,6 @@ const addTestIdentity = async (entry) => {
 ._sel:hover { background:color-mix(in srgb, currentColor 15%, transparent); }
 
 /* "Check again" above Continue: it hands Continue's top margin back, so the two buttons sit one flex gap apart */
-._recheck { margin-bottom:-2.5rem; }
-
 .slide-leave-active {
   transition: all 0.3s ease;
   overflow: hidden;
