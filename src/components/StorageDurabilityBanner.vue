@@ -72,7 +72,7 @@ async function install() {
               <template v-if="installAvailableRef">
                 <a href="#" class="underline text-gray-700 hover:text-gray-900" @click.prevent="install">install it</a>,
               </template>
-              and/or make it your default new tab page to help keep them stored.
+              or make it your default new tab page to help keep them stored.
             </template>
           </div>
         </div>
